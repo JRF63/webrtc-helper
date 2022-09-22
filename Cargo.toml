@@ -1,0 +1,11 @@
+[package]
+name = "webrtc-helper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.57"
+base64 = "0.13.0"
+tokio = { version = "1.21.1", features = ["full"] }
+webrtc = "0.5.0"
+crossbeam-channel = "0.5.6"
