@@ -1,4 +1,3 @@
-use crate::mpsc;
 use async_trait::async_trait;
 use std::{sync::Arc, time::SystemTime};
 use webrtc::{
@@ -9,19 +8,15 @@ use webrtc::{
     rtp::{self, extension::transport_cc_extension::TransportCcExtension},
     util::Unmarshal,
 };
+use super::TwccDataMap;
 
-pub struct TwccData {
-    sequence_number: u16,
-    send_time: SystemTime,
-}
-
-struct TwccCapturerStream {
-    seq_num_sender: mpsc::Sender<TwccData>,
+struct TwccExtensionCapturerStream {
+    map: TwccDataMap,
     hdr_ext_id: u8,
 }
 
 #[async_trait]
-impl RTPWriter for TwccCapturerStream {
+impl RTPWriter for TwccExtensionCapturerStream {
     async fn write(
         &self,
         pkt: &rtp::packet::Packet,
@@ -30,23 +25,22 @@ impl RTPWriter for TwccCapturerStream {
         let mut buf = pkt
             .header
             .get_extension(self.hdr_ext_id)
-            .expect("`TwccCapturerStream` must run after `TransportCcExtension` has been set");
+            .expect("`TwccExtensionCapturerStream` must run after `TransportCcExtension` has been set");
 
         let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
-        let _ = self.seq_num_sender.send(TwccData {
-            sequence_number: tcc_ext.transport_sequence,
-            send_time: SystemTime::now(),
-        });
+        if let Ok(mut map) = self.map.lock() {
+            map.insert(tcc_ext.transport_sequence as _, SystemTime::now());
+        }
         Ok(0)
     }
 }
 
-pub struct TwccCapturer {
-    seq_num_sender: mpsc::Sender<TwccData>,
+pub struct TwccExtensionCapturer {
+    map: TwccDataMap,
 }
 
 #[async_trait]
-impl Interceptor for TwccCapturer {
+impl Interceptor for TwccExtensionCapturer {
     async fn bind_rtcp_reader(
         &self,
         reader: Arc<dyn RTCPReader + Send + Sync>,
@@ -79,8 +73,8 @@ impl Interceptor for TwccCapturer {
         if hdr_ext_id == 0 {
             return writer;
         }
-        Arc::new(TwccCapturerStream {
-            seq_num_sender: self.seq_num_sender.clone(),
+        Arc::new(TwccExtensionCapturerStream {
+            map: self.map.clone(),
             hdr_ext_id,
         })
     }
@@ -102,20 +96,20 @@ impl Interceptor for TwccCapturer {
     }
 }
 
-pub struct TwccCapturerBuilder {
-    seq_num_sender: mpsc::Sender<TwccData>,
+pub struct TwccExtensionCapturerBuilder {
+    map: TwccDataMap,
 }
 
-impl TwccCapturerBuilder {
-    pub fn with_seq_num_sender(seq_num_sender: mpsc::Sender<TwccData>) -> Self {
-        TwccCapturerBuilder { seq_num_sender }
+impl TwccExtensionCapturerBuilder {
+    pub fn with_map(map: TwccDataMap) -> Self {
+        Self { map }
     }
 }
 
-impl InterceptorBuilder for TwccCapturerBuilder {
+impl InterceptorBuilder for TwccExtensionCapturerBuilder {
     fn build(&self, _id: &str) -> Result<Arc<dyn Interceptor + Send + Sync>, Error> {
-        Ok(Arc::new(TwccCapturer {
-            seq_num_sender: self.seq_num_sender.clone(),
+        Ok(Arc::new(TwccExtensionCapturer {
+            map: self.map.clone(),
         }))
     }
 }
