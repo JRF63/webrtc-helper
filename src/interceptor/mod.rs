@@ -1,6 +1,6 @@
 pub mod twcc;
 
-use twcc::{estimator::TwccBandwidthEstimatorBuilder};
+use twcc::TwccBandwidthEstimatorBuilder;
 use webrtc::{
     api::{interceptor_registry::configure_twcc, media_engine::MediaEngine},
     error::Result,

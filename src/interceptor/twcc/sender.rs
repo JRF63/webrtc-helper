@@ -40,8 +40,15 @@ impl RTPWriter for TwccTimestampSenderStream {
         // `TwccExtensionCapturerStream` must run after `TransportCcExtension` has been set
         if let Some(mut buf) = pkt.header.get_extension(self.hdr_ext_id) {
             let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
-            let time = Instant::now().duration_since(self.start_time).as_micros() as i64;
-            self.map[tcc_ext.transport_sequence].store(time);
+
+            let timestamp = {
+                const REFERENCE_TIME_WRAPAROUND: u128 = (1 << 24) * 64000;
+                let duration = Instant::now().duration_since(self.start_time).as_micros();
+                // Imitate the RTCP reference time having 24 bits for easy comparison
+                (duration % REFERENCE_TIME_WRAPAROUND) as i64
+            };
+
+            self.map[tcc_ext.transport_sequence].store(timestamp);
         }
         self.next_writer.write(pkt, attributes).await
     }

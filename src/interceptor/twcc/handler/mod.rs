@@ -1,3 +1,6 @@
+mod delay_based;
+mod loss_based;
+
 use super::data::TwccDataMap;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -34,7 +37,7 @@ impl RTCPReader for TwccRtcpHandlerStream {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
                 let mut sequence_number = tcc.base_sequence_number;
-                let mut arrival_time = (tcc.reference_time * 64000) as i64;
+                let mut arrival_time_us = (tcc.reference_time * 64000) as i64;
 
                 let mut recv_deltas_iter = tcc.recv_deltas.iter();
 
@@ -45,16 +48,16 @@ impl RTCPReader for TwccRtcpHandlerStream {
                             if let Some(recv_delta) = recv_deltas_iter.next() {
                                 match recv_delta.type_tcc_packet {
                                     SymbolTypeTcc::PacketReceivedSmallDelta => {
-                                        arrival_time += recv_delta.delta;
+                                        arrival_time_us += recv_delta.delta;
                                     }
                                     SymbolTypeTcc::PacketReceivedLargeDelta => {
-                                        arrival_time += recv_delta.delta - 8192000;
+                                        arrival_time_us += recv_delta.delta - 8192000;
                                     }
                                     _ => (),
                                 }
 
-                                let send_time = self.map[sequence_number].load();
-                                let packet_delta = arrival_time - send_time;
+                                let send_time_us = self.map[sequence_number].load();
+                                let packet_delta = arrival_time_us - send_time_us;
                             }
                         }
                         _ => (),
