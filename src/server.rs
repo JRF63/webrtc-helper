@@ -7,7 +7,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::Notify;
 use webrtc::{
     api::{
         interceptor_registry::configure_nack, media_engine::MediaEngine,
@@ -183,11 +182,4 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServer<S> {
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
-}
-
-/// Sends audio + video, receives inputs
-pub struct StreamingServerXX {
-    peer_connection: Arc<RTCPeerConnection>,
-    signaler: Arc<dyn Signaler + Send + Sync>,
-    ice_gathering_complete: Arc<Notify>,
 }

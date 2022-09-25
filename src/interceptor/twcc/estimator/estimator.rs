@@ -1,51 +1,23 @@
+use super::{handler::TwccRtcpHandlerStream, sender::TwccTimestampSenderStream, data::TwccDataMap};
 use async_trait::async_trait;
-use std::{sync::Arc, time::SystemTime};
-use webrtc::{
-    interceptor::{
-        stream_info::StreamInfo, Attributes, Error, Interceptor,
-        InterceptorBuilder, RTCPReader, RTCPWriter, RTPReader, RTPWriter,
-    },
-    rtp::{self, extension::transport_cc_extension::TransportCcExtension},
-    util::Unmarshal,
+use std::{sync::Arc, time::Instant};
+use webrtc::interceptor::{
+    stream_info::StreamInfo, Error, Interceptor, InterceptorBuilder, RTCPReader, RTCPWriter,
+    RTPReader, RTPWriter,
 };
-use super::TwccDataMap;
 
-struct TwccExtensionCapturerStream {
+pub struct TwccBandwidthEstimator {
     map: TwccDataMap,
-    hdr_ext_id: u8,
+    start_time: Instant,
 }
 
 #[async_trait]
-impl RTPWriter for TwccExtensionCapturerStream {
-    async fn write(
-        &self,
-        pkt: &rtp::packet::Packet,
-        _attributes: &Attributes,
-    ) -> Result<usize, Error> {
-        let mut buf = pkt
-            .header
-            .get_extension(self.hdr_ext_id)
-            .expect("`TwccExtensionCapturerStream` must run after `TransportCcExtension` has been set");
-
-        let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
-        if let Ok(mut map) = self.map.lock() {
-            map.insert(tcc_ext.transport_sequence as _, SystemTime::now());
-        }
-        Ok(0)
-    }
-}
-
-pub struct TwccExtensionCapturer {
-    map: TwccDataMap,
-}
-
-#[async_trait]
-impl Interceptor for TwccExtensionCapturer {
+impl Interceptor for TwccBandwidthEstimator {
     async fn bind_rtcp_reader(
         &self,
         reader: Arc<dyn RTCPReader + Send + Sync>,
     ) -> Arc<dyn RTCPReader + Send + Sync> {
-        reader
+        Arc::new(TwccRtcpHandlerStream::new(self.map.clone(), reader))
     }
 
     async fn bind_rtcp_writer(
@@ -73,10 +45,12 @@ impl Interceptor for TwccExtensionCapturer {
         if hdr_ext_id == 0 {
             return writer;
         }
-        Arc::new(TwccExtensionCapturerStream {
-            map: self.map.clone(),
+        Arc::new(TwccTimestampSenderStream::new(
+            self.map.clone(),
             hdr_ext_id,
-        })
+            writer,
+            self.start_time,
+        ))
     }
 
     async fn unbind_local_stream(&self, _info: &StreamInfo) {}
@@ -96,20 +70,21 @@ impl Interceptor for TwccExtensionCapturer {
     }
 }
 
-pub struct TwccExtensionCapturerBuilder {
+pub struct TwccBandwidthEstimatorBuilder {
     map: TwccDataMap,
 }
 
-impl TwccExtensionCapturerBuilder {
-    pub fn with_map(map: TwccDataMap) -> Self {
-        Self { map }
+impl TwccBandwidthEstimatorBuilder {
+    pub fn new() -> Self {
+        Self { map: TwccDataMap::new() }
     }
 }
 
-impl InterceptorBuilder for TwccExtensionCapturerBuilder {
+impl InterceptorBuilder for TwccBandwidthEstimatorBuilder {
     fn build(&self, _id: &str) -> Result<Arc<dyn Interceptor + Send + Sync>, Error> {
-        Ok(Arc::new(TwccExtensionCapturer {
+        Ok(Arc::new(TwccBandwidthEstimator {
             map: self.map.clone(),
+            start_time: Instant::now(),
         }))
     }
 }
