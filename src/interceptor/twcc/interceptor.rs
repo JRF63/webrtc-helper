@@ -1,4 +1,4 @@
-use super::{handler::TwccRtcpHandlerStream, sender::TwccTimestampSenderStream, data::TwccDataMap};
+use super::{estimator::TwccEstimatorStream, sender::TwccTimestampSenderStream, data::TwccSendTimeArray};
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};
 use webrtc::interceptor::{
@@ -6,18 +6,18 @@ use webrtc::interceptor::{
     RTPReader, RTPWriter,
 };
 
-pub struct TwccBandwidthEstimator {
-    map: TwccDataMap,
+pub struct TwccInterceptor {
+    map: TwccSendTimeArray,
     start_time: Instant,
 }
 
 #[async_trait]
-impl Interceptor for TwccBandwidthEstimator {
+impl Interceptor for TwccInterceptor {
     async fn bind_rtcp_reader(
         &self,
         reader: Arc<dyn RTCPReader + Send + Sync>,
     ) -> Arc<dyn RTCPReader + Send + Sync> {
-        Arc::new(TwccRtcpHandlerStream::new(self.map.clone(), reader))
+        Arc::new(TwccEstimatorStream::new(self.map.clone(), reader))
     }
 
     async fn bind_rtcp_writer(
@@ -70,19 +70,19 @@ impl Interceptor for TwccBandwidthEstimator {
     }
 }
 
-pub struct TwccBandwidthEstimatorBuilder {
-    map: TwccDataMap,
+pub struct TwccInterceptorBuilder {
+    map: TwccSendTimeArray,
 }
 
-impl TwccBandwidthEstimatorBuilder {
+impl TwccInterceptorBuilder {
     pub fn new() -> Self {
-        Self { map: TwccDataMap::new() }
+        Self { map: TwccSendTimeArray::new() }
     }
 }
 
-impl InterceptorBuilder for TwccBandwidthEstimatorBuilder {
+impl InterceptorBuilder for TwccInterceptorBuilder {
     fn build(&self, _id: &str) -> Result<Arc<dyn Interceptor + Send + Sync>, Error> {
-        Ok(Arc::new(TwccBandwidthEstimator {
+        Ok(Arc::new(TwccInterceptor {
             map: self.map.clone(),
             start_time: Instant::now(),
         }))

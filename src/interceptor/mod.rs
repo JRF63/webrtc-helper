@@ -1,6 +1,6 @@
 pub mod twcc;
 
-use twcc::TwccBandwidthEstimatorBuilder;
+use twcc::TwccInterceptorBuilder;
 use webrtc::{
     api::{interceptor_registry::configure_twcc, media_engine::MediaEngine},
     error::Result,
@@ -12,6 +12,6 @@ pub fn configure_twcc_capturer(
     media_engine: &mut MediaEngine,
 ) -> Result<Registry> {
     let mut registry = configure_twcc(registry, media_engine)?;
-    registry.add(Box::new(TwccBandwidthEstimatorBuilder::new()));
+    registry.add(Box::new(TwccInterceptorBuilder::new()));
     Ok(registry)
 }

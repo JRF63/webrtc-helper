@@ -1,4 +1,4 @@
-use super::data::TwccDataMap;
+use super::data::TwccSendTimeArray;
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};
 use webrtc::{
@@ -8,7 +8,7 @@ use webrtc::{
 };
 
 pub struct TwccTimestampSenderStream {
-    map: TwccDataMap,
+    map: TwccSendTimeArray,
     hdr_ext_id: u8,
     next_writer: Arc<dyn RTPWriter + Send + Sync>,
     start_time: Instant,
@@ -16,7 +16,7 @@ pub struct TwccTimestampSenderStream {
 
 impl TwccTimestampSenderStream {
     pub fn new(
-        map: TwccDataMap,
+        map: TwccSendTimeArray,
         hdr_ext_id: u8,
         next_writer: Arc<dyn RTPWriter + Send + Sync>,
         start_time: Instant,
@@ -40,15 +40,8 @@ impl RTPWriter for TwccTimestampSenderStream {
         // `TwccExtensionCapturerStream` must run after `TransportCcExtension` has been set
         if let Some(mut buf) = pkt.header.get_extension(self.hdr_ext_id) {
             let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
-
-            let timestamp = {
-                const REFERENCE_TIME_WRAPAROUND: u128 = (1 << 24) * 64000;
-                let duration = Instant::now().duration_since(self.start_time).as_micros();
-                // Imitate the RTCP reference time having 24 bits for easy comparison
-                (duration % REFERENCE_TIME_WRAPAROUND) as i64
-            };
-
-            self.map[tcc_ext.transport_sequence].store(timestamp);
+            let time_delta = Instant::now().duration_since(self.start_time);
+            self.map.store_send_time(tcc_ext.transport_sequence, &time_delta);
         }
         self.next_writer.write(pkt, attributes).await
     }

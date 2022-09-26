@@ -1,7 +1,7 @@
 mod delay_based;
 mod loss_based;
 
-use super::data::TwccDataMap;
+use super::data::{TwccSendTimeArray, TwccTime};
 use async_trait::async_trait;
 use std::sync::Arc;
 use webrtc::{
@@ -14,19 +14,19 @@ use webrtc::{
     },
 };
 
-pub struct TwccRtcpHandlerStream {
-    map: TwccDataMap,
+pub struct TwccEstimatorStream {
+    map: TwccSendTimeArray,
     next_reader: Arc<dyn RTCPReader + Send + Sync>,
 }
 
-impl TwccRtcpHandlerStream {
-    pub fn new(map: TwccDataMap, next_reader: Arc<dyn RTCPReader + Send + Sync>) -> Self {
+impl TwccEstimatorStream {
+    pub fn new(map: TwccSendTimeArray, next_reader: Arc<dyn RTCPReader + Send + Sync>) -> Self {
         Self { map, next_reader }
     }
 }
 
 #[async_trait]
-impl RTCPReader for TwccRtcpHandlerStream {
+impl RTCPReader for TwccEstimatorStream {
     async fn read(
         &self,
         buf: &mut [u8],
@@ -37,7 +37,7 @@ impl RTCPReader for TwccRtcpHandlerStream {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
                 let mut sequence_number = tcc.base_sequence_number;
-                let mut arrival_time_us = (tcc.reference_time * 64000) as i64;
+                let mut arrival_time_us = tcc.reference_time as i64 * 64000;
 
                 let mut recv_deltas_iter = tcc.recv_deltas.iter();
 
@@ -56,8 +56,8 @@ impl RTCPReader for TwccRtcpHandlerStream {
                                     _ => (),
                                 }
 
-                                let send_time_us = self.map[sequence_number].load();
-                                let packet_delta = arrival_time_us - send_time_us;
+                                // let send_time_us = self.map[sequence_number].load();
+                                // let packet_delta = arrival_time_us - send_time_us;
                             }
                         }
                         _ => (),
