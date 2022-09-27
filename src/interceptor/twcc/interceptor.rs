@@ -1,4 +1,4 @@
-use super::{estimator::TwccEstimatorStream, sender::TwccTimestampSenderStream, data::TwccSendTimeArray};
+use super::{estimator::TwccEstimatorStream, sender::TwccTimestampSenderStream, data::TwccSendInfo};
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};
 use webrtc::interceptor::{
@@ -7,7 +7,7 @@ use webrtc::interceptor::{
 };
 
 pub struct TwccInterceptor {
-    map: TwccSendTimeArray,
+    map: TwccSendInfo,
     start_time: Instant,
 }
 
@@ -71,12 +71,12 @@ impl Interceptor for TwccInterceptor {
 }
 
 pub struct TwccInterceptorBuilder {
-    map: TwccSendTimeArray,
+    map: TwccSendInfo,
 }
 
 impl TwccInterceptorBuilder {
-    pub fn new() -> Self {
-        Self { map: TwccSendTimeArray::new() }
+    pub fn new() -> TwccInterceptorBuilder {
+        TwccInterceptorBuilder { map: TwccSendInfo::new() }
     }
 }
 

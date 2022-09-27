@@ -1,7 +1,7 @@
 mod delay_based;
 mod loss_based;
 
-use super::data::{TwccSendTimeArray, TwccTime};
+use super::data::{TwccSendInfo, TwccTime};
 use async_trait::async_trait;
 use std::sync::Arc;
 use webrtc::{
@@ -15,13 +15,16 @@ use webrtc::{
 };
 
 pub struct TwccEstimatorStream {
-    map: TwccSendTimeArray,
+    map: TwccSendInfo,
     next_reader: Arc<dyn RTCPReader + Send + Sync>,
 }
 
 impl TwccEstimatorStream {
-    pub fn new(map: TwccSendTimeArray, next_reader: Arc<dyn RTCPReader + Send + Sync>) -> Self {
-        Self { map, next_reader }
+    pub fn new(
+        map: TwccSendInfo,
+        next_reader: Arc<dyn RTCPReader + Send + Sync>,
+    ) -> TwccEstimatorStream {
+        TwccEstimatorStream { map, next_reader }
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::{AtomicI64, Ordering},
+        atomic::{AtomicI64, AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
@@ -17,44 +17,23 @@ const PROBABLE_WRAPAROUND_THRESHOLD: i64 = REFERENCE_TIME_WRAPAROUND / 2;
 pub struct TwccTime(i64);
 
 impl TwccTime {
-    pub fn from_duration(time_delta: &Duration) -> TwccTime {
-        let val = time_delta.as_micros() % (REFERENCE_TIME_WRAPAROUND as u128);
+    /// Reinterpret a `Duration` as a `TwccTime` timestamp.
+    pub const fn from_duration(timestamp: &Duration) -> TwccTime {
+        let val = timestamp.as_micros() % (REFERENCE_TIME_WRAPAROUND as u128);
         TwccTime(val as i64)
     }
 
-    pub fn extract_from_rtcp(rtcp: &TransportLayerCc) -> TwccTime {
+    /// Read the reference time of a TWCC RTCP packet.
+    pub const fn extract_from_rtcp(rtcp: &TransportLayerCc) -> TwccTime {
         // The draft says the reference time should be a 24-bit *signed* integer but the reference
         // implementation treats it as an unsigned.
         let val = rtcp.reference_time as i64 * 64000;
         TwccTime(val)
     }
 
-    /// Subtract `rhs` from `self` assuming they have close values. Large differences are assumed
-    /// to be done over the wrap-around point.
-    pub const fn small_delta_sub(self, rhs: TwccTime) -> i64 {
-        let mut val = self.0 - rhs.0;
-        if val < -PROBABLE_WRAPAROUND_THRESHOLD {
-            val += REFERENCE_TIME_WRAPAROUND;
-        } else if val > PROBABLE_WRAPAROUND_THRESHOLD {
-            val -= REFERENCE_TIME_WRAPAROUND;
-        }
-        val
-    }
-
-    /// Compare this `TwccTime` to another assuming they have close values. Large differences are
-    /// assumed to be done over the wrap-around point.
-    fn small_delta_cmp(&self, other: &TwccTime) -> std::cmp::Ordering {
-        const MIN_I64: i64 = i64::MIN;
-        const MAX_I64: i64 = i64::MAX;
-        match self.small_delta_sub(*other) {
-            0 => std::cmp::Ordering::Equal,
-            1..=MAX_I64 => std::cmp::Ordering::Greater,
-            MIN_I64..=-1 => std::cmp::Ordering::Less,
-        }
-    }
-
-    pub const fn from_recv_delta(self, recv_delta: &RecvDelta) -> TwccTime {
-        let mut val = self.0;
+    /// Build a new `TwccTime` given a base time and a time delta.
+    pub const fn from_recv_delta(base_time: TwccTime, recv_delta: &RecvDelta) -> TwccTime {
+        let mut val = base_time.0;
         match recv_delta.type_tcc_packet {
             SymbolTypeTcc::PacketReceivedSmallDelta => {
                 val += recv_delta.delta;
@@ -74,8 +53,33 @@ impl TwccTime {
         }
         TwccTime(val)
     }
+
+    /// Subtract `rhs` from `self` assuming they have close values. Large differences are assumed
+    /// to be done over the wrap-around point.
+    pub const fn small_delta_sub(self, rhs: TwccTime) -> i64 {
+        let mut val = self.0 - rhs.0;
+        if val < -PROBABLE_WRAPAROUND_THRESHOLD {
+            val += REFERENCE_TIME_WRAPAROUND;
+        } else if val > PROBABLE_WRAPAROUND_THRESHOLD {
+            val -= REFERENCE_TIME_WRAPAROUND;
+        }
+        val
+    }
+
+    /// Compare this `TwccTime` to another assuming they have close values. Large differences are
+    /// assumed to be done over the wrap-around point.
+    const fn small_delta_cmp(&self, other: &TwccTime) -> std::cmp::Ordering {
+        const MIN_I64: i64 = i64::MIN;
+        const MAX_I64: i64 = i64::MAX;
+        match self.small_delta_sub(*other) {
+            0 => std::cmp::Ordering::Equal,
+            1..=MAX_I64 => std::cmp::Ordering::Greater,
+            MIN_I64..=-1 => std::cmp::Ordering::Less,
+        }
+    }
 }
 
+// Impl'ed for readability in the delay-based control.
 impl PartialOrd for TwccTime {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.small_delta_cmp(other))
@@ -138,30 +142,39 @@ mod tests {
 
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct TwccSendTimeArray(Arc<Vec<AtomicI64>>);
+pub struct TwccSendInfo(Arc<Box<[(AtomicI64, AtomicU64)]>>);
 
-impl TwccSendTimeArray {
-    pub fn new() -> Self {
+impl TwccSendInfo {
+    // This allocates a relatively large ~1 MB fixed-size array
+    pub fn new() -> TwccSendInfo {
         const ALLOC_SIZE: usize = (u16::MAX as usize) + 1;
+
         let mut vec = Vec::new();
         vec.reserve_exact(ALLOC_SIZE);
+
         for _ in 0..ALLOC_SIZE {
-            vec.push(AtomicI64::default())
+            vec.push(Default::default());
         }
-        Self(Arc::new(vec))
+
+        TwccSendInfo(Arc::new(vec.into_boxed_slice()))
     }
 
-    fn get(&self, index: u16) -> &AtomicI64 {
-        // SAFETY: The inner vec has (u16::MAX + 1) values
+    fn get(&self, index: u16) -> &(AtomicI64, AtomicU64) {
+        // SAFETY: The inner vec has (u16::MAX + 1) values so indices up to u16::MAX are valid
         unsafe { self.0.get_unchecked(index as usize) }
     }
 
-    pub fn store_send_time(&self, index: u16, time_delta: &Duration) {
-        self.get(index)
-            .store(TwccTime::from_duration(time_delta).0, Ordering::Release);
+    pub fn store(&self, index: u16, timestamp: TwccTime, packet_size: u64) {
+        let (a, b) = self.get(index);
+        a.store(timestamp.0, Ordering::Release);
+        b.store(packet_size, Ordering::Release);
     }
 
-    pub fn load_send_time(&self, index: u16) -> TwccTime {
-        TwccTime(self.get(index).load(Ordering::Acquire))
+    pub fn load(&self, index: u16) -> (TwccTime, u64) {
+        let (a, b) = self.get(index);
+        (
+            TwccTime(a.load(Ordering::Acquire)),
+            b.load(Ordering::Acquire),
+        )
     }
 }
