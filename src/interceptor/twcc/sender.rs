@@ -1,4 +1,4 @@
-use super::data::{TwccSendInfo, TwccTime};
+use super::sync::{TwccSendInfo, TwccTime};
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};
 use webrtc::{
@@ -39,17 +39,16 @@ impl RTPWriter for TwccTimestampSenderStream {
     ) -> Result<usize, Error> {
         // `TwccExtensionCapturerStream` must run after `TransportCcExtension` has been set
         if let Some(mut buf) = pkt.header.get_extension(self.hdr_ext_id) {
-            // Header size is off by a few bytes since it does not include extensions
-            let header_size = 32 * 3 + pkt.header.csrc.len() as u64;
-            // Using normal addition here assuming we won't be sending exabytes in one packet
-            let packet_size = header_size + pkt.payload.len() as u64;
+            // Incoming bitrate measured, R_hat, only considers payload size:
+            // https://datatracker.ietf.org/doc/html/draft-ietf-rmcat-gcc-02#section-5.5
+            let payload_size = pkt.payload.len() as u64;
 
             let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
             let timestamp = Instant::now().duration_since(self.start_time);
             self.map.store(
                 tcc_ext.transport_sequence,
                 TwccTime::from_duration(&timestamp),
-                packet_size
+                payload_size
             );
         }
         self.next_writer.write(pkt, attributes).await

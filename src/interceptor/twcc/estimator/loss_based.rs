@@ -1,25 +1,21 @@
 //! https://datatracker.ietf.org/doc/html/draft-ietf-rmcat-gcc-02#section-6
 
-pub struct LossBasedBandwidthEstimator {
-    bandwidth_estimate: f32
-}
+pub struct LossBasedBandwidthEstimator;
 
 impl LossBasedBandwidthEstimator {
-    pub fn new(init_bandwidth: f32) -> LossBasedBandwidthEstimator {
-        LossBasedBandwidthEstimator { bandwidth_estimate: init_bandwidth }
+    pub fn new() -> LossBasedBandwidthEstimator {
+        LossBasedBandwidthEstimator {}
     }
 
-    pub fn update(&mut self, received: u32, lost: u32) {
+    pub fn estimate(&mut self, current_bandwidth: f32, received: u32, lost: u32) -> f32 {
         let total = received + lost;
         let fraction_lost = lost as f32 / total as f32;
         if fraction_lost < 0.02 {
-            self.bandwidth_estimate *= 1.05;
+            current_bandwidth * 1.05
         } else if fraction_lost > 0.10 {
-            self.bandwidth_estimate *= 1.0 - 0.5 * fraction_lost;
+            current_bandwidth * (1.0 - 0.5 * fraction_lost)
+        } else {
+            current_bandwidth
         }
-    }
-
-    pub fn get_estimate(&self) -> f32 {
-        self.bandwidth_estimate
     }
 }

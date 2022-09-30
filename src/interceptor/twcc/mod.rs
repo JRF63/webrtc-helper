@@ -1,6 +1,7 @@
 mod sender;
 mod estimator;
 mod interceptor;
-mod data;
+mod sync;
 
 pub use interceptor::TwccInterceptorBuilder;
+pub use sync::TwccBandwidthEstimate;

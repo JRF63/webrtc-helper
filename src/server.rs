@@ -54,7 +54,7 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
         }
 
         let registry = configure_nack(Registry::new(), &mut media_engine);
-        let registry = configure_twcc_capturer(registry, &mut media_engine)?;
+        let (registry, bandwidth_estimate) = configure_twcc_capturer(registry, &mut media_engine)?;
 
         let mut setting_engine = SettingEngine::default();
         if self.mdns {

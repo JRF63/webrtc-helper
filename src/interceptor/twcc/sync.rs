@@ -14,6 +14,7 @@ const PROBABLE_WRAPAROUND_THRESHOLD: i64 = REFERENCE_TIME_WRAPAROUND / 2;
 
 // Timestamp is always in the half-open domain [0, 1073741824000).
 #[derive(Clone, Copy, PartialEq)]
+#[repr(transparent)]
 pub struct TwccTime(i64);
 
 impl TwccTime {
@@ -176,5 +177,27 @@ impl TwccSendInfo {
             TwccTime(a.load(Ordering::Acquire)),
             b.load(Ordering::Acquire),
         )
+    }
+}
+
+#[derive(Clone)]
+#[repr(transparent)]
+pub struct TwccBandwidthEstimate(Arc<AtomicU64>);
+
+impl TwccBandwidthEstimate {
+    const INITIAL_BANDWIDTH: u64 = 125_000;
+
+    pub fn new() -> TwccBandwidthEstimate {
+        TwccBandwidthEstimate(Arc::new(AtomicU64::new(
+            TwccBandwidthEstimate::INITIAL_BANDWIDTH,
+        )))
+    }
+
+    pub(crate) fn set_estimate(&self, bandwidth: u64) {
+        self.0.store(bandwidth, Ordering::Release);
+    }
+
+    pub fn get_estimate(&self) -> u64 {
+        self.0.load(Ordering::Acquire)
     }
 }
