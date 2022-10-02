@@ -141,38 +141,37 @@ mod tests {
     }
 }
 
+// To be able to index in the range [0, u16::MAX]
+const TWCC_ARRAY_SIZE: usize = (u16::MAX as usize) + 1;
+
+// Box<[T; N]> is used instead of Vec<T> or Box<[T]> to help the compiler to elide-out the bounds
+// check when indexing with a u16.
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct TwccSendInfo(Arc<Box<[(AtomicI64, AtomicU64)]>>);
+pub struct TwccSendInfo(Arc<Box<[(AtomicI64, AtomicU64); TWCC_ARRAY_SIZE]>>);
 
 impl TwccSendInfo {
     // This allocates a relatively large ~1 MB fixed-size array
     pub fn new() -> TwccSendInfo {
-        const ALLOC_SIZE: usize = (u16::MAX as usize) + 1;
-
         let mut vec = Vec::new();
-        vec.reserve_exact(ALLOC_SIZE);
+        vec.reserve_exact(TWCC_ARRAY_SIZE);
 
-        for _ in 0..ALLOC_SIZE {
+        for _ in 0..TWCC_ARRAY_SIZE {
             vec.push(Default::default());
         }
 
-        TwccSendInfo(Arc::new(vec.into_boxed_slice()))
+        let boxed_array = TryFrom::try_from(vec.into_boxed_slice()).unwrap();
+        TwccSendInfo(Arc::new(boxed_array))
     }
-
-    fn get(&self, index: u16) -> &(AtomicI64, AtomicU64) {
-        // SAFETY: The inner vec has (u16::MAX + 1) values so indices up to u16::MAX are valid
-        unsafe { self.0.get_unchecked(index as usize) }
-    }
-
+    
     pub fn store(&self, index: u16, timestamp: TwccTime, packet_size: u64) {
-        let (a, b) = self.get(index);
+        let (a, b) = &self.0[index as usize];
         a.store(timestamp.0, Ordering::Release);
         b.store(packet_size, Ordering::Release);
     }
 
     pub fn load(&self, index: u16) -> (TwccTime, u64) {
-        let (a, b) = self.get(index);
+        let (a, b) = &self.0[index as usize];
         (
             TwccTime(a.load(Ordering::Acquire)),
             b.load(Ordering::Acquire),

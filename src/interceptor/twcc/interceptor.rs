@@ -1,7 +1,7 @@
 use super::{
     estimator::TwccBandwidthEstimator,
     sender::TwccTimestampSenderStream,
-    sync::{TwccBandwidthEstimate, TwccSendInfo, TwccTime},
+    sync::{TwccBandwidthEstimate, TwccSendInfo},
 };
 use async_trait::async_trait;
 use std::{
@@ -13,12 +13,7 @@ use webrtc::{
         stream_info::StreamInfo, Attributes, Error, Interceptor, InterceptorBuilder, RTCPReader,
         RTCPWriter, RTPReader, RTPWriter,
     },
-    rtcp::{
-        self,
-        transport_feedbacks::transport_layer_cc::{
-            PacketStatusChunk, SymbolTypeTcc, TransportLayerCc,
-        },
-    },
+    rtcp::{self, transport_feedbacks::transport_layer_cc::TransportLayerCc},
 };
 
 pub struct TwccStream {
@@ -49,67 +44,19 @@ impl RTCPReader for TwccStream {
         attributes: &Attributes,
     ) -> Result<(usize, Attributes), Error> {
         let now = Instant::now();
-        let mut received = 0;
-        let mut lost = 0;
 
         let packets = rtcp::packet::unmarshal(&mut &buf[..])?;
         for packet in packets {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
-                let mut sequence_number = tcc.base_sequence_number;
-                let mut arrival_time = TwccTime::extract_from_rtcp(tcc);
-
-                let mut recv_deltas_iter = tcc.recv_deltas.iter();
-
-                let mut with_packet_status = |status: &SymbolTypeTcc| {
-                    match status {
-                        SymbolTypeTcc::PacketNotReceived => {
-                            lost += 1;
-                        }
-                        SymbolTypeTcc::PacketReceivedWithoutDelta => {
-                            received += 1;
-                        }
-                        _ => {
-                            received += 1;
-                            if let Some(recv_delta) = recv_deltas_iter.next() {
-                                arrival_time = TwccTime::from_recv_delta(arrival_time, recv_delta);
-
-                                let (departure_time, packet_size) = self.map.load(sequence_number);
-
-                                if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock()
-                                {
-                                    bandwidth_estimator.process_packet_feedback(
-                                        departure_time,
-                                        arrival_time,
-                                        packet_size,
-                                        now,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    sequence_number = sequence_number.wrapping_add(1);
-                };
-
-                for chunk in tcc.packet_chunks.iter() {
-                    match chunk {
-                        PacketStatusChunk::RunLengthChunk(chunk) => {
-                            for _ in 0..chunk.run_length {
-                                with_packet_status(&chunk.packet_status_symbol);
-                            }
-                        }
-                        PacketStatusChunk::StatusVectorChunk(chunk) => {
-                            for status in chunk.symbol_list.iter() {
-                                with_packet_status(status);
-                            }
-                        }
-                    }
+                if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
+                    bandwidth_estimator.process_feedback(tcc, &self.map, now);
                 }
             }
         }
 
         if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-            bandwidth_estimator.estimate(received, lost, now);
+            bandwidth_estimator.estimate(now);
         }
 
         self.next_reader.read(buf, attributes).await

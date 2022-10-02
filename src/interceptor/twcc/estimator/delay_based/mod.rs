@@ -57,7 +57,7 @@ impl DelayBasedBandwidthEstimator {
         }
     }
 
-    pub fn process_packet_feedback(
+    pub fn process_packet(
         &mut self,
         departure_time: TwccTime,
         arrival_time: TwccTime,
