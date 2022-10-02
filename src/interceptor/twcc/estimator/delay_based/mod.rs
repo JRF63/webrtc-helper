@@ -26,7 +26,7 @@ const CHI: f32 = 0.01;
 
 const INITIAL_DELAY_THRESHOLD_US: f32 = 12500.0;
 
-const OVERUSE_TIME_THRESHOLD_MS: u128 = 10;
+const OVERUSE_TIME_THRESHOLD_US: i64 = 10000;
 
 const K_U: f32 = 0.01;
 
@@ -62,7 +62,6 @@ impl DelayBasedBandwidthEstimator {
         departure_time: TwccTime,
         arrival_time: TwccTime,
         packet_size: u64,
-        now: Instant,
     ) {
         let mut new_packet_group = false;
 
@@ -80,14 +79,14 @@ impl DelayBasedBandwidthEstimator {
         }
 
         if new_packet_group {
-            self.curr_group_completed(now);
+            self.curr_group_completed(arrival_time);
 
             std::mem::swap(&mut self.prev_group, &mut self.curr_group);
             self.curr_group = Some(PacketGroup::new(departure_time, arrival_time, packet_size));
         }
     }
 
-    fn curr_group_completed(&mut self, now: Instant) -> Option<f32> {
+    fn curr_group_completed(&mut self, arrival_time: TwccTime) -> Option<f32> {
         if let (Some(curr_group), Some(prev_group)) = (&self.curr_group, &self.prev_group) {
             let interdeparture_time = curr_group.interdeparture_time(prev_group);
             self.history.add_group(curr_group, interdeparture_time);
@@ -101,7 +100,7 @@ impl DelayBasedBandwidthEstimator {
                         intergroup_delay,
                         min_send_interval,
                         interarrival_time,
-                        now,
+                        arrival_time,
                     );
                 }
             } else {

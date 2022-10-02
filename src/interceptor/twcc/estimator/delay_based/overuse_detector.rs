@@ -69,7 +69,7 @@ pub enum NetworkState {
 pub struct DelayDetector {
     delay_threshold: DelayThreshold,
     filter: ArrivalTimeFilter,
-    overuse_start: Option<Instant>,
+    overuse_start: Option<TwccTime>,
 }
 
 impl DelayDetector {
@@ -86,7 +86,7 @@ impl DelayDetector {
         intergroup_delay: i64,
         min_send_interval: i64,
         interarrival_time: i64,
-        now: Instant,
+        arrival_time: TwccTime,
     ) -> NetworkState {
         let prev_m = self.filter.update(intergroup_delay, min_send_interval);
         let m = self.filter.m_hat;
@@ -101,12 +101,12 @@ impl DelayDetector {
                 NetworkState::Normal
             } else {
                 if let Some(overuse_start) = self.overuse_start {
-                    let elapsed = now.duration_since(overuse_start);
-                    if elapsed.as_millis() >= OVERUSE_TIME_THRESHOLD_MS {
+                    let elapsed = arrival_time.small_delta_sub(overuse_start);
+                    if elapsed >= OVERUSE_TIME_THRESHOLD_US {
                         return NetworkState::Overuse;
                     }
                 } else {
-                    self.overuse_start = Some(now);
+                    self.overuse_start = Some(arrival_time);
                 }
                 NetworkState::Normal
             }

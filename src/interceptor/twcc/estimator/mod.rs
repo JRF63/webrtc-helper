@@ -63,7 +63,6 @@ impl TwccBandwidthEstimator {
                             departure_time,
                             arrival_time,
                             packet_size,
-                            now,
                         );
                     }
                 }
