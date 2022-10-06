@@ -13,7 +13,7 @@ use std::{collections::VecDeque, time::Instant};
 const BURST_TIME_US: i64 = 5000;
 
 // Should be within 500 - 1000 ms if packets are grouped by 5 ms burst time
-const WINDOW_SIZE: usize = 100;
+const WINDOW_SIZE: u32 = 100;
 
 const ESTIMATOR_REACTION_TIME_MS: f32 = 100.0;
 
@@ -95,7 +95,7 @@ impl DelayBasedBandwidthEstimator {
             let intergroup_delay = interarrival_time - interdeparture_time;
 
             if let Some(delay_detector) = &mut self.delay_detector {
-                if let Some(min_send_interval) = self.history.smallest_send_interval() {
+                if let Some(&min_send_interval) = self.history.smallest_send_interval() {
                     self.network_state = delay_detector.update(
                         intergroup_delay,
                         min_send_interval,

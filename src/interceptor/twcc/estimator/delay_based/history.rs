@@ -1,20 +1,59 @@
 use super::*;
 
+struct AscendingMinima<T: PartialOrd, const N: u32> {
+    window: VecDeque<(u32, T)>,
+    counter: u32,
+    capacity_reached: bool,
+}
+
+impl<T: PartialOrd, const N: u32> AscendingMinima<T, N> {
+    fn new() -> AscendingMinima<T, N> {
+        AscendingMinima {
+            window: VecDeque::with_capacity((N + 1) as usize),
+            counter: 0,
+            capacity_reached: false,
+        }
+    }
+
+    fn push(&mut self, value: T) {
+        while let Some(item) = self.window.back() {
+            if item.1 >= value {
+                self.window.pop_back();
+            } else {
+                break;
+            }
+        }
+        self.window.push_back((self.counter, value));
+
+        if self.capacity_reached {
+            if let Some(item) = self.window.front() {
+                if self.counter.wrapping_sub(item.0) >= N {
+                    self.window.pop_front();
+                }
+            }
+            self.counter = self.counter.wrapping_add(1);
+        } else {
+            self.counter = self.counter.wrapping_add(1);
+            if self.counter == N {
+                self.capacity_reached = true;
+            }
+        }
+    }
+
+    fn minimum(&self) -> Option<&T> {
+        self.window.front().map(|v| &v.1)
+    }
+}
+
 struct WindowData {
-    id: u32,
     arrival_time_us: TwccTime,
     size_bytes: u64,
     num_packets: u64,
 }
 
-struct InterdepartureTimeData {
-    id: u32,
-    inter_depature_time: i64,
-}
-
 pub struct History {
     data: VecDeque<WindowData>,
-    ascending_minima: VecDeque<InterdepartureTimeData>,
+    ascending_minima: AscendingMinima<i64, WINDOW_SIZE>,
     total_packet_size_bytes: u64,
     num_packets: u64,
 }
@@ -23,78 +62,29 @@ impl History {
     pub fn new() -> History {
         History {
             data: VecDeque::new(),
-            ascending_minima: VecDeque::new(),
+            ascending_minima: AscendingMinima::new(),
             total_packet_size_bytes: 0,
             num_packets: 0,
         }
     }
 
-    pub fn add_group(&mut self, curr_group: &PacketGroup, inter_depature_time: i64) {
+    pub fn add_group(&mut self, curr_group: &PacketGroup, interdeparture_time: i64) {
         let window_data = WindowData {
-            id: self
-                .data
-                .back()
-                .map(|x| x.id.wrapping_add(1))
-                .unwrap_or_default(),
             arrival_time_us: curr_group.arrival_time_us,
             size_bytes: curr_group.size_bytes,
             num_packets: curr_group.num_packets,
-        };
-        let idt_data = InterdepartureTimeData {
-            id: window_data.id,
-            inter_depature_time,
         };
 
         self.total_packet_size_bytes += window_data.size_bytes;
         self.num_packets += window_data.num_packets;
         self.data.push_back(window_data);
+        self.ascending_minima.push(interdeparture_time);
 
-        if self.data.len() < WINDOW_SIZE {
-            // Temporarily stores the inter-departure times until len() == WINDOW_SIZE
-            self.ascending_minima.push_back(idt_data);
-        } else if self.data.len() == WINDOW_SIZE {
-            self.build_ascending_minima();
-        } else {
-            let to_remove = self.data.pop_front().unwrap();
-            self.total_packet_size_bytes -= to_remove.size_bytes;
-            self.num_packets -= to_remove.num_packets;
-            self.maintain_ascending_minima(to_remove.id, idt_data);
-        }
-    }
-
-    fn build_ascending_minima(&mut self) {
-        let mut start = 0;
-        let mut tmp = VecDeque::new();
-
-        while let Some((index, minimum)) = self
-            .ascending_minima
-            .iter()
-            .enumerate()
-            .skip(start)
-            .reduce(|accum, item| {
-                if item.1.inter_depature_time < accum.1.inter_depature_time {
-                    item
-                } else {
-                    accum
-                }
-            })
-        {
-            tmp.push_back(InterdepartureTimeData {
-                id: minimum.id,
-                inter_depature_time: minimum.inter_depature_time,
-            });
-            start = index + 1;
-        }
-        self.ascending_minima = tmp;
-    }
-
-    fn maintain_ascending_minima(&mut self, id_to_remove: u32, item: InterdepartureTimeData) {
-        while self.ascending_minima.back().unwrap().inter_depature_time > item.inter_depature_time {
-            self.ascending_minima.pop_back();
-        }
-        self.ascending_minima.push_back(item);
-        if self.ascending_minima.front().unwrap().id == id_to_remove {
-            self.ascending_minima.pop_front();
+        if self.data.len() > WINDOW_SIZE as usize {
+            if let Some(to_remove) = self.data.pop_front() {
+                self.total_packet_size_bytes -= to_remove.size_bytes;
+                self.num_packets -= to_remove.num_packets;
+            }
         }
     }
 
@@ -112,16 +102,7 @@ impl History {
     }
 
     /// Used for computing f_max in the arrival-time filter
-    pub fn smallest_send_interval(&self) -> Option<i64> {
-        if self.data.len() < WINDOW_SIZE {
-            self.ascending_minima
-                .iter()
-                .map(|x| x.inter_depature_time)
-                .min()
-        } else {
-            self.ascending_minima
-                .front()
-                .map(|front| front.inter_depature_time)
-        }
+    pub fn smallest_send_interval(&self) -> Option<&i64> {
+        self.ascending_minima.minimum()
     }
 }
