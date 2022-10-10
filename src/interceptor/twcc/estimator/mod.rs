@@ -1,19 +1,13 @@
 mod delay_based;
 mod loss_based;
 
-use webrtc::{
-    rtcp::{
-        receiver_report::ReceiverReport,
-        transport_feedbacks::transport_layer_cc::{
-            PacketStatusChunk, SymbolTypeTcc, TransportLayerCc,
-        },
-    },
-    rtp::extension::abs_send_time_extension::unix2ntp,
+use webrtc::rtcp::transport_feedbacks::transport_layer_cc::{
+    PacketStatusChunk, SymbolTypeTcc, TransportLayerCc,
 };
 
 use self::{delay_based::DelayBasedBandwidthEstimator, loss_based::LossBasedBandwidthEstimator};
 use super::sync::{TwccBandwidthEstimate, TwccSendInfo, TwccTime};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 pub struct TwccBandwidthEstimator {
     estimate: TwccBandwidthEstimate,
@@ -35,12 +29,12 @@ impl TwccBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, now: Instant) {
-        let current_bandwidth = self.estimate.get_estimate() as f32;
+        let current_bandwidth = self.estimate.get_estimate() as f64;
         let a = self.delay_based_estimator.estimate(current_bandwidth, now);
         let b = self
             .loss_based_estimator
             .estimate(current_bandwidth, self.received, self.lost);
-        self.estimate.set_estimate(f32::min(a, b) as u64);
+        self.estimate.set_estimate(f64::min(a, b) as u64);
 
         self.received = 0;
         self.lost = 0;
@@ -94,19 +88,14 @@ impl TwccBandwidthEstimator {
         }
     }
 
-    pub fn update_rtt(&mut self, rr: &ReceiverReport) {
-        let now = (unix2ntp(SystemTime::now()) >> 16) as u32;
-
-        for recp in &rr.reports {
-            let rtt_ms = calculate_rtt_ms(now, recp.delay, recp.last_sender_report);
-            self.delay_based_estimator.update_rtt(rtt_ms);
-        }
+    pub fn update_rtt(&mut self, rtt_ms: f64) {
+        self.delay_based_estimator.update_rtt(rtt_ms);
     }
 }
 
-fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f32 {
+fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
     let rtt = now - delay - last_sender_report;
     let rtt_seconds = rtt >> 16;
-    let rtt_fraction = (rtt & (u16::MAX as u32)) as f32 / (u16::MAX as u32) as f32;
-    rtt_seconds as f32 * 1000.0 + (rtt_fraction as f32) * 1000.0
+    let rtt_fraction = (rtt & (u16::MAX as u32)) as f64 / (u16::MAX as u32) as f64;
+    rtt_seconds as f64 * 1000.0 + (rtt_fraction as f64) * 1000.0
 }

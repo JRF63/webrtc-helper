@@ -88,15 +88,15 @@ impl History {
         }
     }
 
-    pub fn average_packet_size_bytes(&self) -> f32 {
-        self.total_packet_size_bytes as f32 / self.num_packets as f32
+    pub fn average_packet_size_bytes(&self) -> f64 {
+        self.total_packet_size_bytes as f64 / self.num_packets as f64
     }
 
-    pub fn received_bandwidth_bytes_per_sec(&self) -> Option<f32> {
+    pub fn received_bandwidth_bytes_per_sec(&self) -> Option<f64> {
         let start = self.data.front()?.arrival_time_us;
         let end = self.data.back()?.arrival_time_us;
         let timespan = end.small_delta_sub(start);
-        Some(self.total_packet_size_bytes as f32 / timespan as f32)
+        Some(self.total_packet_size_bytes as f64 / timespan as f64)
     }
 
     /// Used for computing f_max in the arrival-time filter

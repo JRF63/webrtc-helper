@@ -6,7 +6,7 @@ use super::{
 use async_trait::async_trait;
 use std::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 use webrtc::{
     interceptor::{
@@ -17,6 +17,7 @@ use webrtc::{
         self, receiver_report::ReceiverReport,
         transport_feedbacks::transport_layer_cc::TransportLayerCc,
     },
+    rtp::extension::abs_send_time_extension::unix2ntp,
 };
 
 pub struct TwccStream {
@@ -56,8 +57,19 @@ impl RTCPReader for TwccStream {
                     bandwidth_estimator.process_feedback(tcc, &self.map);
                 }
             } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
-                if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-                    bandwidth_estimator.update_rtt(rr);
+                let now = (unix2ntp(SystemTime::now()) >> 16) as u32;
+
+                // Get the last RTT
+                let rtt_ms = rr
+                    .reports
+                    .iter()
+                    .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
+                    .reduce(|_, item| item);
+
+                if let Some(rtt_ms) = rtt_ms {
+                    if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
+                        bandwidth_estimator.update_rtt(rtt_ms);
+                    }
                 }
             }
         }
@@ -165,4 +177,12 @@ impl InterceptorBuilder for TwccInterceptorBuilder {
             start_time: Instant::now(),
         }))
     }
+}
+
+// TODO: This was copied from interceptor::stats::StatsInterceptor
+fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
+    let rtt = now - delay - last_sender_report;
+    let rtt_seconds = rtt >> 16;
+    let rtt_fraction = (rtt & (u16::MAX as u32)) as f64 / (u16::MAX as u32) as f64;
+    rtt_seconds as f64 * 1000.0 + (rtt_fraction as f64) * 1000.0
 }

@@ -15,31 +15,31 @@ const BURST_TIME_US: i64 = 5000;
 // Should be within 500 - 1000 ms if packets are grouped by 5 ms burst time
 const WINDOW_SIZE: u32 = 100;
 
-const ESTIMATOR_REACTION_TIME_MS: f32 = 100.0;
+const ESTIMATOR_REACTION_TIME_MS: f64 = 100.0;
 
-const STATE_NOISE_COVARIANCE: f32 = 10e-3;
+const STATE_NOISE_COVARIANCE: f64 = 10e-3;
 
-const INITIAL_SYSTEM_ERROR_COVARIANCE: f32 = 0.1;
+const INITIAL_SYSTEM_ERROR_COVARIANCE: f64 = 0.1;
 
 // Midway between the recommended value of 0.001 - 0.1
-const CHI: f32 = 0.01;
+const CHI: f64 = 0.01;
 
-const INITIAL_DELAY_THRESHOLD_US: f32 = 12500.0;
+const INITIAL_DELAY_THRESHOLD_US: f64 = 12500.0;
 
 const OVERUSE_TIME_THRESHOLD_US: i64 = 10000;
 
-const K_U: f32 = 0.01;
+const K_U: f64 = 0.01;
 
-const K_D: f32 = 0.00018;
+const K_D: f64 = 0.00018;
 
-const DECREASE_RATE_FACTOR: f32 = 0.85;
+const DECREASE_RATE_FACTOR: f64 = 0.85;
 
 // Exponential moving average smoothing factor
-const ALPHA: f32 = 0.95;
+const ALPHA: f64 = 0.95;
 
 struct IncomingBitrateEstimate {
-    mean: f32,
-    variance: f32,
+    mean: f64,
+    variance: f64,
     close_to_ave: bool,
 }
 
@@ -52,7 +52,7 @@ impl IncomingBitrateEstimate {
         }
     }
 
-    fn update(&mut self, bytes_per_sec: f32) {
+    fn update(&mut self, bytes_per_sec: f64) {
         let stddev = self.variance.sqrt();
         if (bytes_per_sec - self.mean).abs() < 3.0 * stddev {
             self.close_to_ave = true;
@@ -81,7 +81,7 @@ pub struct DelayBasedBandwidthEstimator {
     delay_detector: Option<DelayDetector>,
     last_update: Option<Instant>,
     network_condition: NetworkCondition,
-    rtt_ms: f32,
+    rtt_ms: f64,
 }
 
 impl DelayBasedBandwidthEstimator {
@@ -127,7 +127,7 @@ impl DelayBasedBandwidthEstimator {
         }
     }
 
-    pub fn update_rtt(&mut self, rtt_ms: f32) {
+    pub fn update_rtt(&mut self, rtt_ms: f64) {
         self.rtt_ms = rtt_ms;
     }
 
@@ -166,7 +166,7 @@ impl DelayBasedBandwidthEstimator {
         }
     }
 
-    pub fn estimate(&mut self, current_bandwidth: f32, now: Instant) -> f32 {
+    pub fn estimate(&mut self, current_bandwidth: f64, now: Instant) -> f64 {
         let mut bandwidth_estimate = match self.network_condition {
             overuse_detector::NetworkCondition::Underuse => {
                 let time_since_last_update_ms = self.time_since_last_update(now);
@@ -196,36 +196,36 @@ impl DelayBasedBandwidthEstimator {
         return bandwidth_estimate;
     }
 
-    fn time_since_last_update(&self, now: Instant) -> f32 {
+    fn time_since_last_update(&self, now: Instant) -> f64 {
         let millis = self
             .last_update
-            .map(|t| now.duration_since(t).as_millis() as f32)
-            .unwrap_or((BURST_TIME_US / 1000) as f32);
+            .map(|t| now.duration_since(t).as_millis() as f64)
+            .unwrap_or((BURST_TIME_US / 1000) as f64);
         millis
     }
 }
 
 fn bandwidth_additive_increase(
-    current_bandwidth: f32,
-    time_since_last_update_ms: f32,
-    rtt_ms: f32,
-    ave_packet_size_bytes: f32,
-) -> f32 {
+    current_bandwidth: f64,
+    time_since_last_update_ms: f64,
+    rtt_ms: f64,
+    ave_packet_size_bytes: f64,
+) -> f64 {
     let response_time_ms = ESTIMATOR_REACTION_TIME_MS + rtt_ms;
 
-    let alpha = 0.5 * f32::min(1.0, time_since_last_update_ms / response_time_ms);
+    let alpha = 0.5 * f64::min(1.0, time_since_last_update_ms / response_time_ms);
     // Bandwidth is in bytes/s hence the 1000 in the congestion control draft was divided by 8
-    current_bandwidth + f32::max(125.0, alpha * ave_packet_size_bytes)
+    current_bandwidth + f64::max(125.0, alpha * ave_packet_size_bytes)
 }
 
 fn bandwidth_multiplicative_increase(
-    current_bandwidth: f32,
-    time_since_last_update_ms: f32,
-) -> f32 {
-    let eta = 1.08f32.powf(f32::min(1.0, time_since_last_update_ms / 1000.0));
+    current_bandwidth: f64,
+    time_since_last_update_ms: f64,
+) -> f64 {
+    let eta = 1.08f64.powf(f64::min(1.0, time_since_last_update_ms / 1000.0));
     current_bandwidth * eta
 }
 
-fn bandwidth_decrease(current_bandwidth: f32) -> f32 {
+fn bandwidth_decrease(current_bandwidth: f64) -> f64 {
     current_bandwidth * DECREASE_RATE_FACTOR
 }
