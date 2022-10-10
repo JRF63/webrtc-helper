@@ -127,7 +127,7 @@ impl DelayBasedBandwidthEstimator {
         }
     }
 
-    pub fn set_rtt(&mut self, rtt_ms: f32) {
+    pub fn update_rtt(&mut self, rtt_ms: f32) {
         self.rtt_ms = rtt_ms;
     }
 

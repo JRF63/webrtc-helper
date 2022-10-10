@@ -1,11 +1,19 @@
 mod delay_based;
 mod loss_based;
 
-use webrtc::rtcp::transport_feedbacks::transport_layer_cc::{TransportLayerCc, SymbolTypeTcc, PacketStatusChunk};
+use webrtc::{
+    rtcp::{
+        receiver_report::ReceiverReport,
+        transport_feedbacks::transport_layer_cc::{
+            PacketStatusChunk, SymbolTypeTcc, TransportLayerCc,
+        },
+    },
+    rtp::extension::abs_send_time_extension::unix2ntp,
+};
 
 use self::{delay_based::DelayBasedBandwidthEstimator, loss_based::LossBasedBandwidthEstimator};
 use super::sync::{TwccBandwidthEstimate, TwccSendInfo, TwccTime};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 pub struct TwccBandwidthEstimator {
     estimate: TwccBandwidthEstimate,
@@ -38,7 +46,7 @@ impl TwccBandwidthEstimator {
         self.lost = 0;
     }
 
-    pub fn process_feedback(&mut self, tcc: &TransportLayerCc, send_info: &TwccSendInfo, now: Instant) {
+    pub fn process_feedback(&mut self, tcc: &TransportLayerCc, send_info: &TwccSendInfo) {
         let mut sequence_number = tcc.base_sequence_number;
         let mut arrival_time = TwccTime::extract_from_rtcp(tcc);
 
@@ -85,4 +93,20 @@ impl TwccBandwidthEstimator {
             }
         }
     }
+
+    pub fn update_rtt(&mut self, rr: &ReceiverReport) {
+        let now = (unix2ntp(SystemTime::now()) >> 16) as u32;
+
+        for recp in &rr.reports {
+            let rtt_ms = calculate_rtt_ms(now, recp.delay, recp.last_sender_report);
+            self.delay_based_estimator.update_rtt(rtt_ms);
+        }
+    }
+}
+
+fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f32 {
+    let rtt = now - delay - last_sender_report;
+    let rtt_seconds = rtt >> 16;
+    let rtt_fraction = (rtt & (u16::MAX as u32)) as f32 / (u16::MAX as u32) as f32;
+    rtt_seconds as f32 * 1000.0 + (rtt_fraction as f32) * 1000.0
 }

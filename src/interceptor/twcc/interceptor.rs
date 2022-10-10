@@ -13,7 +13,10 @@ use webrtc::{
         stream_info::StreamInfo, Attributes, Error, Interceptor, InterceptorBuilder, RTCPReader,
         RTCPWriter, RTPReader, RTPWriter,
     },
-    rtcp::{self, transport_feedbacks::transport_layer_cc::TransportLayerCc},
+    rtcp::{
+        self, receiver_report::ReceiverReport,
+        transport_feedbacks::transport_layer_cc::TransportLayerCc,
+    },
 };
 
 pub struct TwccStream {
@@ -50,7 +53,11 @@ impl RTCPReader for TwccStream {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
                 if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-                    bandwidth_estimator.process_feedback(tcc, &self.map, now);
+                    bandwidth_estimator.process_feedback(tcc, &self.map);
+                }
+            } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
+                if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
+                    bandwidth_estimator.update_rtt(rr);
                 }
             }
         }
