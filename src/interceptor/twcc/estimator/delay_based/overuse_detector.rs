@@ -60,7 +60,7 @@ impl DelayThreshold {
     }
 }
 
-pub enum NetworkState {
+pub enum NetworkCondition {
     Underuse,
     Normal,
     Overuse,
@@ -81,13 +81,13 @@ impl DelayDetector {
         }
     }
 
-    pub fn update(
+    pub fn detect_network_condition(
         &mut self,
         intergroup_delay: i64,
         min_send_interval: i64,
         interarrival_time: i64,
         arrival_time: TwccTime,
-    ) -> NetworkState {
+    ) -> NetworkCondition {
         let prev_m = self.filter.update(intergroup_delay, min_send_interval);
         let m = self.filter.m_hat;
 
@@ -98,24 +98,24 @@ impl DelayDetector {
         if m > del_var_th {
             if m < prev_m {
                 self.overuse_start = None;
-                NetworkState::Normal
+                NetworkCondition::Normal
             } else {
                 if let Some(overuse_start) = self.overuse_start {
                     let elapsed = arrival_time.small_delta_sub(overuse_start);
                     if elapsed >= OVERUSE_TIME_THRESHOLD_US {
-                        return NetworkState::Overuse;
+                        return NetworkCondition::Overuse;
                     }
                 } else {
                     self.overuse_start = Some(arrival_time);
                 }
-                NetworkState::Normal
+                NetworkCondition::Normal
             }
         } else if m < -del_var_th {
             self.overuse_start = None;
-            NetworkState::Underuse
+            NetworkCondition::Underuse
         } else {
             self.overuse_start = None;
-            NetworkState::Normal
+            NetworkCondition::Normal
         }
     }
 }

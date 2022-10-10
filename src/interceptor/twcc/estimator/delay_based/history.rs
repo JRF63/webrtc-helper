@@ -93,11 +93,9 @@ impl History {
     }
 
     pub fn received_bandwidth_bytes_per_sec(&self) -> Option<f32> {
-        let timespan = self
-            .data
-            .back()?
-            .arrival_time_us
-            .small_delta_sub(self.data.front()?.arrival_time_us);
+        let start = self.data.front()?.arrival_time_us;
+        let end = self.data.back()?.arrival_time_us;
+        let timespan = end.small_delta_sub(start);
         Some(self.total_packet_size_bytes as f32 / timespan as f32)
     }
 
