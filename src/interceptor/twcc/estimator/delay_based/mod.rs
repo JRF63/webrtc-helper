@@ -53,20 +53,20 @@ impl IncomingBitrateEstimate {
     }
 
     fn update(&mut self, bytes_per_sec: f64) {
-        let stddev = self.variance.sqrt();
-        if (bytes_per_sec - self.mean).abs() < 3.0 * stddev {
-            self.close_to_ave = true;
-        } else {
+        let diff = bytes_per_sec - self.mean;
+        // Check if sample is beyond 3 stddevs away from the mean
+        if diff * diff > 9.0 * self.variance {
             // Reset the average and go to multiplicative increase
             self.mean = bytes_per_sec;
             self.variance = 0.0;
             self.close_to_ave = false;
             return;
+        } else {
+            self.close_to_ave = true;
         }
 
         // Exponentially-weighted mean and variance calculation from:
         // https://web.archive.org/web/20181222175223/http://people.ds.cam.ac.uk/fanf2/hermes/doc/antiforgery/stats.pdf
-        let diff = bytes_per_sec - self.mean;
         let incr = ALPHA * diff;
         self.mean = self.mean + incr;
         self.variance = (1.0 - ALPHA) * (self.variance + diff * incr);
