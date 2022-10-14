@@ -29,12 +29,12 @@ impl TwccBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, now: Instant) {
-        let current_bandwidth = self.estimate.get_estimate() as f64;
+        let current_bandwidth = self.estimate.get_estimate_bytes_per_sec() as f64;
         let a = self.delay_based_estimator.estimate(current_bandwidth, now);
         let b = self
             .loss_based_estimator
             .estimate(current_bandwidth, self.received, self.lost);
-        self.estimate.set_estimate(f64::min(a, b) as u64);
+        self.estimate.set_estimate_bytes_per_sec(f64::min(a, b));
 
         self.received = 0;
         self.lost = 0;
@@ -91,11 +91,4 @@ impl TwccBandwidthEstimator {
     pub fn update_rtt(&mut self, rtt_ms: f64) {
         self.delay_based_estimator.update_rtt(rtt_ms);
     }
-}
-
-fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
-    let rtt = now - delay - last_sender_report;
-    let rtt_seconds = rtt >> 16;
-    let rtt_fraction = (rtt & (u16::MAX as u32)) as f64 / (u16::MAX as u32) as f64;
-    rtt_seconds as f64 * 1000.0 + (rtt_fraction as f64) * 1000.0
 }

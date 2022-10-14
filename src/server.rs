@@ -1,5 +1,6 @@
 use crate::{
-    interceptor::configure_twcc_capturer,
+    codecs::Codec,
+    interceptor::{configure_custom_twcc, twcc::TwccBandwidthEstimate},
     signaling::{Message, Signaler},
     Result,
 };
@@ -9,8 +10,10 @@ use std::sync::{
 };
 use webrtc::{
     api::{
-        interceptor_registry::configure_nack, media_engine::MediaEngine,
-        setting_engine::SettingEngine, APIBuilder,
+        interceptor_registry::{configure_nack, configure_rtcp_reports},
+        media_engine::MediaEngine,
+        setting_engine::SettingEngine,
+        APIBuilder,
     },
     ice::mdns::MulticastDnsMode,
     ice_transport::ice_server::RTCIceServer,
@@ -18,13 +21,11 @@ use webrtc::{
     peer_connection::{
         configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType, RTCPeerConnection,
     },
-    rtp_transceiver::rtp_codec::{RTCRtpCodecParameters, RTPCodecType},
-    track::track_local::track_local_static_rtp::TrackLocalStaticRTP,
 };
 
 pub struct StreamingServerBuilder<S: Signaler + Send + Sync + 'static> {
-    tracks: Vec<(Arc<TrackLocalStaticRTP>, RTPCodecType)>,
     signaler: S,
+    codecs: Vec<Codec>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
@@ -32,29 +33,32 @@ pub struct StreamingServerBuilder<S: Signaler + Send + Sync + 'static> {
 impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
     pub fn new(signaler: S) -> Self {
         StreamingServerBuilder {
-            tracks: Vec::new(),
             signaler,
+            codecs: Vec::new(),
             ice_servers: Vec::new(),
             mdns: false,
         }
     }
 
     pub async fn build(self) -> Result<Arc<StreamingServer<S>>> {
-        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
-
         let mut media_engine = MediaEngine::default();
-        for (payload_type, (track, codec_type)) in (DYNAMIC_PAYLOAD_TYPE_START..).zip(&self.tracks)
         {
-            let codec = RTCRtpCodecParameters {
-                capability: track.codec(),
-                payload_type,
-                ..Default::default()
-            };
-            media_engine.register_codec(codec, *codec_type)?;
+            const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
+            let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
+            for mut codec in self.codecs {
+                if let Some(payload_type) = payload_id {
+                    codec.set_payload_type(payload_type);
+                    let num_registered = codec.register_to_media_engine(&mut media_engine)?;
+                    payload_id = payload_type.checked_add(num_registered);
+                } else {
+                    panic!("Registered too many codecs");
+                }
+            }
         }
 
         let registry = configure_nack(Registry::new(), &mut media_engine);
-        let (registry, bandwidth_estimate) = configure_twcc_capturer(registry, &mut media_engine)?;
+        let registry = configure_rtcp_reports(registry);
+        let (registry, bandwidth_estimate) = configure_custom_twcc(registry, &mut media_engine)?;
 
         let mut setting_engine = SettingEngine::default();
         if self.mdns {
@@ -76,6 +80,7 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
                 .await?,
             signaler: self.signaler,
             closed: AtomicBool::new(false),
+            bandwidth_estimate,
         });
 
         let streaming_serve_clone = streaming_server.clone();
@@ -89,10 +94,7 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
                             .peer_connection
                             .set_local_description(offer.clone())
                             .await;
-                        let _ = streaming_server
-                            .signaler
-                            .send(Message::Sdp(offer))
-                            .await;
+                        let _ = streaming_server.signaler.send(Message::Sdp(offer)).await;
                     }
                 })
             }))
@@ -166,12 +168,12 @@ pub struct StreamingServer<S: Signaler + Send + Sync + 'static> {
     peer_connection: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
-    // bandwidth_estimate: ??
+    bandwidth_estimate: TwccBandwidthEstimate,
 }
 
 impl<S: Signaler + Send + Sync + 'static> StreamingServer<S> {
-    pub fn builder() -> StreamingServerBuilder<S> {
-        todo!()
+    pub fn builder(signaler: S) -> StreamingServerBuilder<S> {
+        StreamingServerBuilder::new(signaler)
     }
 
     pub async fn close(&self) {

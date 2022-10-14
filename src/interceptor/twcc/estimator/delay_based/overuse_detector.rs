@@ -91,8 +91,7 @@ impl DelayDetector {
         let prev_m = self.filter.update(intergroup_delay, min_send_interval);
         let m = self.filter.m_hat;
 
-        self.delay_threshold
-            .update(interarrival_time, m);
+        self.delay_threshold.update(interarrival_time, m);
         let del_var_th = self.delay_threshold.threshold;
 
         if m > del_var_th {
@@ -101,7 +100,7 @@ impl DelayDetector {
                 NetworkCondition::Normal
             } else {
                 if let Some(overuse_start) = self.overuse_start {
-                    let elapsed = arrival_time.small_delta_sub(overuse_start);
+                    let elapsed = arrival_time.sub_assuming_small_delta(overuse_start);
                     if elapsed >= OVERUSE_TIME_THRESHOLD_US {
                         return NetworkCondition::Overuse;
                     }

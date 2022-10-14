@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use webrtc::{
     ice_transport::ice_candidate::RTCIceCandidate,
     peer_connection::sdp::session_description::RTCSessionDescription,
 };
-use async_trait::async_trait;
 
 #[async_trait]
 pub trait SignalingChannel {
@@ -19,7 +19,7 @@ pub trait SignalingChannel {
 pub enum Message {
     Sdp(RTCSessionDescription),
     IceCandidate(RTCIceCandidate),
-    Bye
+    Bye,
 }
 
 #[async_trait]

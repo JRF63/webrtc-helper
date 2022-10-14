@@ -48,7 +48,7 @@ impl RTPWriter for TwccTimestampSenderStream {
             self.map.store(
                 tcc_ext.transport_sequence,
                 TwccTime::from_duration(&timestamp),
-                payload_size
+                payload_size,
             );
         }
         self.next_writer.write(pkt, attributes).await

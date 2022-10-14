@@ -95,7 +95,7 @@ impl History {
     pub fn received_bandwidth_bytes_per_sec(&self) -> Option<f64> {
         let start = self.data.front()?.arrival_time_us;
         let end = self.data.back()?.arrival_time_us;
-        let timespan = end.small_delta_sub(start);
+        let timespan = end.sub_assuming_small_delta(start);
         Some(self.total_packet_size_bytes as f64 / timespan as f64)
     }
 

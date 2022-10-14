@@ -24,12 +24,15 @@ impl PacketGroup {
     }
 
     pub fn belongs_to_group(&self, departure_time_us: TwccTime, arrival_time_us: TwccTime) -> bool {
-        if departure_time_us.small_delta_sub(self.earliest_departure_time_us) > BURST_TIME_US {
+        if departure_time_us.sub_assuming_small_delta(self.earliest_departure_time_us)
+            > BURST_TIME_US
+        {
             return true;
         }
 
-        let interarrival_time = arrival_time_us.small_delta_sub(self.arrival_time_us);
-        let interdeparture_time = departure_time_us.small_delta_sub(self.departure_time_us);
+        let interarrival_time = arrival_time_us.sub_assuming_small_delta(self.arrival_time_us);
+        let interdeparture_time =
+            departure_time_us.sub_assuming_small_delta(self.departure_time_us);
         let intergroup_delay = interarrival_time - interdeparture_time;
         if interarrival_time < BURST_TIME_US && intergroup_delay < 0 {
             return true;
@@ -56,11 +59,12 @@ impl PacketGroup {
     }
 
     pub fn interarrival_time(&self, other: &PacketGroup) -> i64 {
-        self.arrival_time_us.small_delta_sub(other.arrival_time_us)
+        self.arrival_time_us
+            .sub_assuming_small_delta(other.arrival_time_us)
     }
 
     pub fn interdeparture_time(&self, other: &PacketGroup) -> i64 {
         self.departure_time_us
-            .small_delta_sub(other.departure_time_us)
+            .sub_assuming_small_delta(other.departure_time_us)
     }
 }

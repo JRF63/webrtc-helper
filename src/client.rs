@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 use webrtc::{
     api::{
-        interceptor_registry::{
-            configure_nack, configure_twcc_receiver_only,
-        },
+        interceptor_registry::{configure_nack, configure_twcc_receiver_only},
         media_engine::MediaEngine,
         APIBuilder,
     },

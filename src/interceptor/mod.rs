@@ -7,7 +7,7 @@ use webrtc::{
     interceptor::registry::Registry,
 };
 
-pub fn configure_twcc_capturer(
+pub fn configure_custom_twcc(
     registry: Registry,
     media_engine: &mut MediaEngine,
 ) -> Result<(Registry, TwccBandwidthEstimate)> {

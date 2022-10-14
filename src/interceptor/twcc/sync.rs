@@ -57,7 +57,7 @@ impl TwccTime {
 
     /// Subtract `rhs` from `self` assuming they have close values. Large differences are assumed
     /// to be done over the wrap-around point.
-    pub const fn small_delta_sub(self, rhs: TwccTime) -> i64 {
+    pub const fn sub_assuming_small_delta(self, rhs: TwccTime) -> i64 {
         let mut val = self.0 - rhs.0;
         if val < -PROBABLE_WRAPAROUND_THRESHOLD {
             val += REFERENCE_TIME_WRAPAROUND;
@@ -69,10 +69,10 @@ impl TwccTime {
 
     /// Compare this `TwccTime` to another assuming they have close values. Large differences are
     /// assumed to be done over the wrap-around point.
-    const fn small_delta_cmp(&self, other: &TwccTime) -> std::cmp::Ordering {
+    const fn cmp_assuming_small_delta(&self, other: &TwccTime) -> std::cmp::Ordering {
         const MIN_I64: i64 = i64::MIN;
         const MAX_I64: i64 = i64::MAX;
-        match self.small_delta_sub(*other) {
+        match self.sub_assuming_small_delta(*other) {
             0 => std::cmp::Ordering::Equal,
             1..=MAX_I64 => std::cmp::Ordering::Greater,
             MIN_I64..=-1 => std::cmp::Ordering::Less,
@@ -83,7 +83,7 @@ impl TwccTime {
 // Impl'ed for readability in the delay-based control.
 impl PartialOrd for TwccTime {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.small_delta_cmp(other))
+        Some(self.cmp_assuming_small_delta(other))
     }
 }
 
@@ -98,17 +98,20 @@ mod tests {
         let delta_1 = 64000;
         timestamp += Duration::from_micros(delta_1);
         let b = TwccTime::from_duration(&timestamp);
-        assert_eq!(b.small_delta_sub(a), delta_1 as i64);
+        assert_eq!(b.sub_assuming_small_delta(a), delta_1 as i64);
 
         // Wraps around
         let delta_2 = 640000;
         timestamp += Duration::from_micros(delta_2);
         let c = TwccTime::from_duration(&timestamp);
         assert!(b.0 > c.0);
-        assert_eq!(c.small_delta_sub(b), delta_2 as i64);
+        assert_eq!(c.sub_assuming_small_delta(b), delta_2 as i64);
 
-        assert_eq!(a.small_delta_sub(a), 0);
-        assert_eq!(b.small_delta_sub(a), -a.small_delta_sub(b));
+        assert_eq!(a.sub_assuming_small_delta(a), 0);
+        assert_eq!(
+            b.sub_assuming_small_delta(a),
+            -a.sub_assuming_small_delta(b)
+        );
     }
 
     #[test]
@@ -121,13 +124,13 @@ mod tests {
         let c = TwccTime::from_duration(&timestamp); // Wraps around
         assert!(b.0 > c.0);
 
-        assert_eq!(a.small_delta_cmp(&a), std::cmp::Ordering::Equal);
-        assert_eq!(b.small_delta_cmp(&a), std::cmp::Ordering::Greater);
-        assert_eq!(c.small_delta_cmp(&b), std::cmp::Ordering::Greater);
-        assert_eq!(c.small_delta_cmp(&a), std::cmp::Ordering::Greater);
-        assert_eq!(a.small_delta_cmp(&b), std::cmp::Ordering::Less);
-        assert_eq!(b.small_delta_cmp(&c), std::cmp::Ordering::Less);
-        assert_eq!(a.small_delta_cmp(&c), std::cmp::Ordering::Less);
+        assert_eq!(a.cmp_assuming_small_delta(&a), std::cmp::Ordering::Equal);
+        assert_eq!(b.cmp_assuming_small_delta(&a), std::cmp::Ordering::Greater);
+        assert_eq!(c.cmp_assuming_small_delta(&b), std::cmp::Ordering::Greater);
+        assert_eq!(c.cmp_assuming_small_delta(&a), std::cmp::Ordering::Greater);
+        assert_eq!(a.cmp_assuming_small_delta(&b), std::cmp::Ordering::Less);
+        assert_eq!(b.cmp_assuming_small_delta(&c), std::cmp::Ordering::Less);
+        assert_eq!(a.cmp_assuming_small_delta(&c), std::cmp::Ordering::Less);
 
         let thirty_hours = Duration::from_secs(30 * 3600);
         let mut timestamp = Duration::from_micros(0);
@@ -135,7 +138,10 @@ mod tests {
         for _ in 0..20 {
             timestamp += thirty_hours;
             let current = TwccTime::from_duration(&timestamp);
-            assert_eq!(current.small_delta_cmp(&prev), std::cmp::Ordering::Greater);
+            assert_eq!(
+                current.cmp_assuming_small_delta(&prev),
+                std::cmp::Ordering::Greater
+            );
             prev = current;
         }
     }
@@ -163,7 +169,7 @@ impl TwccSendInfo {
         let boxed_array = TryFrom::try_from(vec.into_boxed_slice()).unwrap();
         TwccSendInfo(Arc::new(boxed_array))
     }
-    
+
     pub fn store(&self, index: u16, timestamp: TwccTime, packet_size: u64) {
         let (a, b) = &self.0[index as usize];
         a.store(timestamp.0, Ordering::Release);
@@ -192,11 +198,13 @@ impl TwccBandwidthEstimate {
         )))
     }
 
-    pub(crate) fn set_estimate(&self, bandwidth: u64) {
-        self.0.store(bandwidth, Ordering::Release);
+    pub(crate) fn set_estimate_bytes_per_sec(&self, bandwidth: f64) {
+        let bytes = bandwidth.to_ne_bytes();
+        self.0.store(u64::from_ne_bytes(bytes), Ordering::Release);
     }
 
-    pub fn get_estimate(&self) -> u64 {
-        self.0.load(Ordering::Acquire)
+    pub fn get_estimate_bytes_per_sec(&self) -> f64 {
+        let bytes = self.0.load(Ordering::Acquire).to_ne_bytes();
+        f64::from_ne_bytes(bytes)
     }
 }
