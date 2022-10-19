@@ -1,4 +1,3 @@
-mod client;
 mod codecs;
 mod interceptor;
 mod mpsc;
@@ -7,6 +6,5 @@ mod signaling;
 
 use webrtc::error::Result;
 
-pub use client::StreamingClient;
-pub use server::StreamingServer;
-pub use codecs::{Codec};
+pub use codecs::Codec;
+pub use server::WebRtc;

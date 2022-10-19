@@ -102,7 +102,7 @@ impl Codec {
         Codec { parameters, typ }
     }
 
-    /// H264 codec with parameters that is guaranteed to be supported by most browsers.
+    /// H264 codec with parameters that are guaranteed to be supported by most browsers.
     pub fn h264() -> Codec {
         // profile_idc=0x42 (Constrained Baseline)
         // profile_iop=0b11100000

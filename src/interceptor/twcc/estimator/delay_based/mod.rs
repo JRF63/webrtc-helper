@@ -40,7 +40,7 @@ const ALPHA: f64 = 0.95;
 struct IncomingBitrateEstimate {
     mean: f64,
     variance: f64,
-    close_to_ave: bool,
+    converged: bool,
 }
 
 impl IncomingBitrateEstimate {
@@ -48,7 +48,7 @@ impl IncomingBitrateEstimate {
         IncomingBitrateEstimate {
             mean: 0.0,
             variance: 0.0,
-            close_to_ave: false,
+            converged: false,
         }
     }
 
@@ -59,10 +59,10 @@ impl IncomingBitrateEstimate {
             // Reset the average and go to multiplicative increase
             self.mean = bytes_per_sec;
             self.variance = 0.0;
-            self.close_to_ave = false;
+            self.converged = false;
             return;
         } else {
-            self.close_to_ave = true;
+            self.converged = true;
         }
 
         // Exponentially-weighted mean and variance calculation from:
@@ -70,6 +70,10 @@ impl IncomingBitrateEstimate {
         let incr = ALPHA * diff;
         self.mean = self.mean + incr;
         self.variance = (1.0 - ALPHA) * (self.variance + diff * incr);
+    }
+
+    fn has_converged(&self) -> bool {
+        self.converged
     }
 }
 
@@ -148,17 +152,6 @@ impl DelayBasedBandwidthEstimator {
                         interarrival_time,
                         arrival_time,
                     );
-
-                    match self.network_condition {
-                        NetworkCondition::Overuse => {
-                            if let Some(bytes_per_sec) =
-                                self.history.received_bandwidth_bytes_per_sec()
-                            {
-                                self.incoming_bitrate_estimate.update(bytes_per_sec)
-                            }
-                        }
-                        _ => (),
-                    }
                 }
             } else {
                 self.delay_detector = Some(DelayDetector::new(intergroup_delay));
@@ -168,10 +161,20 @@ impl DelayBasedBandwidthEstimator {
 
     pub fn estimate(&mut self, current_bandwidth: f64, now: Instant) -> f64 {
         let mut bandwidth_estimate = match self.network_condition {
-            overuse_detector::NetworkCondition::Underuse => {
+            NetworkCondition::Underuse => {
+                match self.network_condition {
+                    NetworkCondition::Overuse => {
+                        if let Some(bytes_per_sec) = self.history.received_bandwidth_bytes_per_sec()
+                        {
+                            self.incoming_bitrate_estimate.update(bytes_per_sec)
+                        }
+                    }
+                    _ => (),
+                }
+
                 let time_since_last_update_ms = self.time_since_last_update(now);
 
-                if self.incoming_bitrate_estimate.close_to_ave {
+                if self.incoming_bitrate_estimate.has_converged() {
                     bandwidth_additive_increase(
                         current_bandwidth,
                         time_since_last_update_ms,
@@ -182,8 +185,8 @@ impl DelayBasedBandwidthEstimator {
                     bandwidth_multiplicative_increase(current_bandwidth, time_since_last_update_ms)
                 }
             }
-            overuse_detector::NetworkCondition::Normal => current_bandwidth,
-            overuse_detector::NetworkCondition::Overuse => bandwidth_decrease(current_bandwidth),
+            NetworkCondition::Normal => current_bandwidth,
+            NetworkCondition::Overuse => bandwidth_decrease(current_bandwidth),
         };
         self.last_update = Some(now);
 

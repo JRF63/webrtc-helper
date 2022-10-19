@@ -23,16 +23,16 @@ use webrtc::{
     },
 };
 
-pub struct StreamingServerBuilder<S: Signaler + Send + Sync + 'static> {
+pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
     signaler: S,
     codecs: Vec<Codec>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
 
-impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
+impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
     pub fn new(signaler: S) -> Self {
-        StreamingServerBuilder {
+        WebRtcBuilder {
             signaler,
             codecs: Vec::new(),
             ice_servers: Vec::new(),
@@ -40,7 +40,7 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
         }
     }
 
-    pub async fn build(self) -> Result<Arc<StreamingServer<S>>> {
+    pub async fn build(self) -> Result<Arc<WebRtc<S>>> {
         let mut media_engine = MediaEngine::default();
         {
             const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
@@ -71,7 +71,7 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
             .with_setting_engine(setting_engine)
             .build();
 
-        let streaming_server = Arc::new(StreamingServer {
+        let peer = Arc::new(WebRtc {
             peer_connection: api_builder
                 .new_peer_connection(RTCConfiguration {
                     ice_servers: self.ice_servers,
@@ -83,66 +83,50 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
             bandwidth_estimate,
         });
 
-        let streaming_serve_clone = streaming_server.clone();
-        streaming_server
-            .peer_connection
+        let weak_ref = Arc::downgrade(&peer);
+        peer.peer_connection
             .on_negotiation_needed(Box::new(move || {
-                let streaming_server = streaming_serve_clone.clone();
+                let peer = weak_ref.clone();
                 Box::pin(async move {
-                    if let Ok(offer) = streaming_server.peer_connection.create_offer(None).await {
-                        let _ = streaming_server
-                            .peer_connection
-                            .set_local_description(offer.clone())
-                            .await;
-                        let _ = streaming_server.signaler.send(Message::Sdp(offer)).await;
+                    if let Some(peer) = peer.upgrade() {
+                        peer.start_negotiation().await;
                     }
                 })
             }))
             .await;
 
-        let streaming_server_clone = streaming_server.clone();
-        streaming_server
-            .peer_connection
+        let weak_ref = Arc::downgrade(&peer);
+        peer.peer_connection
             .on_ice_candidate(Box::new(move |candidate| {
-                let streaming_server = streaming_server_clone.clone();
+                let peer = weak_ref.clone();
                 Box::pin(async move {
-                    if let Some(candidate) = candidate {
-                        streaming_server
-                            .signaler
-                            .send(Message::IceCandidate(candidate))
-                            .await
-                            .expect("Peer A: Unable to send ICE candidate");
+                    if let (Some(peer), Some(candidate)) = (peer.upgrade(), candidate) {
+                        let _ = peer.signaler.send(Message::IceCandidate(candidate)).await;
                     }
                 })
             }))
             .await;
 
-        let streaming_server_clone = streaming_server.clone();
+        let peer_clone = peer.clone();
         tokio::spawn(async move {
             // TODO: swallow errors
-            let streaming_server = streaming_server_clone.clone();
-            while !streaming_server.is_closed() {
-                if let Ok(msg) = streaming_server.signaler.recv().await {
+            let peer = peer_clone.clone();
+            while !peer.is_closed() {
+                if let Ok(msg) = peer.signaler.recv().await {
                     match msg {
                         Message::Sdp(sdp) => {
                             let sdp_type = sdp.sdp_type;
-                            streaming_server
-                                .peer_connection
-                                .set_remote_description(sdp)
-                                .await?;
+                            peer.peer_connection.set_remote_description(sdp).await?;
                             if sdp_type == RTCSdpType::Offer {
-                                let answer =
-                                    streaming_server.peer_connection.create_answer(None).await?;
-                                streaming_server
-                                    .peer_connection
+                                let answer = peer.peer_connection.create_answer(None).await?;
+                                peer.peer_connection
                                     .set_local_description(answer.clone())
                                     .await?;
-                                let _ = streaming_server.signaler.send(Message::Sdp(answer)).await;
+                                let _ = peer.signaler.send(Message::Sdp(answer)).await;
                             }
                         }
                         Message::IceCandidate(candidate) => {
-                            streaming_server
-                                .peer_connection
+                            peer.peer_connection
                                 .add_ice_candidate(candidate.to_json().await?)
                                 .await?;
                         }
@@ -160,20 +144,20 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServerBuilder<S> {
         //     let _rtp_sender = peer_connection.add_track(track as _).await?;
         // }
 
-        Ok(streaming_server)
+        Ok(peer)
     }
 }
 
-pub struct StreamingServer<S: Signaler + Send + Sync + 'static> {
+pub struct WebRtc<S: Signaler + Send + Sync + 'static> {
     peer_connection: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
     bandwidth_estimate: TwccBandwidthEstimate,
 }
 
-impl<S: Signaler + Send + Sync + 'static> StreamingServer<S> {
-    pub fn builder(signaler: S) -> StreamingServerBuilder<S> {
-        StreamingServerBuilder::new(signaler)
+impl<S: Signaler + Send + Sync + 'static> WebRtc<S> {
+    pub fn builder(signaler: S) -> WebRtcBuilder<S> {
+        WebRtcBuilder::new(signaler)
     }
 
     pub async fn close(&self) {
@@ -183,5 +167,15 @@ impl<S: Signaler + Send + Sync + 'static> StreamingServer<S> {
 
     pub fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    pub async fn start_negotiation(&self) {
+        if let Ok(offer) = self.peer_connection.create_offer(None).await {
+            let _ = self
+                .peer_connection
+                .set_local_description(offer.clone())
+                .await;
+            let _ = self.signaler.send(Message::Sdp(offer)).await;
+        };
     }
 }
