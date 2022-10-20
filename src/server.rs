@@ -26,6 +26,7 @@ use webrtc::{
 pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
     signaler: S,
     codecs: Vec<Codec>,
+    // tracks: ???
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
