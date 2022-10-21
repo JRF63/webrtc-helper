@@ -2,7 +2,7 @@ use crate::{
     codecs::Codec,
     interceptor::{configure_custom_twcc, twcc::TwccBandwidthEstimate},
     signaling::{Message, Signaler},
-    Result,
+    CustomTrackLocal,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -25,8 +25,8 @@ use webrtc::{
 
 pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
     signaler: S,
-    codecs: Vec<Codec>,
-    // tracks: ???
+    receivable_codecs: Vec<Codec>,
+    sendable_tracks: Vec<CustomTrackLocal>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
@@ -35,18 +35,28 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
     pub fn new(signaler: S) -> Self {
         WebRtcBuilder {
             signaler,
-            codecs: Vec::new(),
+            receivable_codecs: Vec::new(),
+            sendable_tracks: Vec::new(),
             ice_servers: Vec::new(),
             mdns: false,
         }
     }
 
-    pub async fn build(self) -> Result<Arc<WebRtc<S>>> {
+    pub async fn build(mut self) -> webrtc::error::Result<Arc<WebRtc<S>>> {
         let mut media_engine = MediaEngine::default();
         {
             const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
+
             let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
-            for mut codec in self.codecs {
+
+            let mut codecs = Vec::new();
+            codecs.append(&mut self.receivable_codecs);
+
+            for track in self.sendable_tracks.iter() {
+                codecs.extend_from_slice(track.supported_codecs());
+            }
+
+            for mut codec in codecs {
                 if let Some(payload_type) = payload_id {
                     codec.set_payload_type(payload_type);
                     let num_registered = codec.register_to_media_engine(&mut media_engine)?;
@@ -135,10 +145,10 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
                     }
                 }
             }
-            Result::Ok(())
+            webrtc::error::Result::Ok(())
         });
 
-        // TODO: ICE restart
+        // TODO: ICE restart 
 
         // for (track, _) in self.tracks {
         //     // TODO: tokio::spawn a handler

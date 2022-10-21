@@ -12,9 +12,10 @@ const MIME_TYPE_OPUS: &str = "audio/opus";
 // TODO:
 // const MIME_TYPE_H265: &str = "video/H265";
 
+#[derive(Clone)]
 pub struct Codec {
     parameters: RTCRtpCodecParameters,
-    typ: RTPCodecType,
+    kind: RTPCodecType,
 }
 
 impl Codec {
@@ -24,8 +25,8 @@ impl Codec {
 
     /// Configure the media engine to use the codec and returns the number of codecs registered.
     pub(crate) fn register_to_media_engine(&self, media_engine: &mut MediaEngine) -> Result<u8> {
-        media_engine.register_codec(self.parameters.clone(), self.typ)?;
-        if self.typ == RTPCodecType::Video {
+        media_engine.register_codec(self.parameters.clone(), self.kind)?;
+        if self.kind == RTPCodecType::Video {
             let rfc4588_payload_type = self.parameters.payload_type.checked_add(1);
             if let Some(payload_type) = rfc4588_payload_type {
                 let rfc4588_params = RTCRtpCodecParameters {
@@ -50,6 +51,17 @@ impl Codec {
         }
     }
 
+    pub(crate) fn kind(&self) -> RTPCodecType {
+        self.kind
+    }
+    
+    pub(crate) fn matches_parameters(
+        &self,
+        parameters: &RTCRtpCodecParameters,
+    ) -> bool {
+        self.parameters.capability == parameters.capability
+    }
+
     pub fn opus() -> Codec {
         let parameters = RTCRtpCodecParameters {
             capability: RTCRtpCodecCapability {
@@ -62,8 +74,8 @@ impl Codec {
             payload_type: 0,
             ..Default::default()
         };
-        let typ = RTPCodecType::Audio;
-        Codec { parameters, typ }
+        let kind = RTPCodecType::Audio;
+        Codec { parameters, kind }
     }
 
     pub fn h264_custom(
@@ -72,7 +84,7 @@ impl Codec {
         sps_and_pps: Option<(&[u8], &[u8])>,
     ) -> Codec {
         // level_idc=0x1f (Level 3.1)
-        // Hardcoded since level-asymmetry-allowed=1
+        // Hardcoded since level-asymmetry-allowed is enabled
         let level_idc = 0x1f;
 
         // level-asymmetry-allowed=1 (Offerer can send at a higher level (bitrate) than negotiated)
@@ -98,8 +110,8 @@ impl Codec {
             payload_type: 0,
             ..Default::default()
         };
-        let typ = RTPCodecType::Video;
-        Codec { parameters, typ }
+        let kind = RTPCodecType::Video;
+        Codec { parameters, kind }
     }
 
     /// H264 codec with parameters that are guaranteed to be supported by most browsers.
@@ -149,20 +161,3 @@ fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
 //         ..Default::default()
 //     }
 // }
-
-// RFC4588
-pub(crate) fn rtp_retransmission(
-    video_codec_params: &RTCRtpCodecParameters,
-) -> RTCRtpCodecParameters {
-    RTCRtpCodecParameters {
-        capability: RTCRtpCodecCapability {
-            mime_type: "video/rtx".to_owned(),
-            clock_rate: 90000,
-            channels: 0,
-            sdp_fmtp_line: format!("apt={}", video_codec_params.payload_type),
-            rtcp_feedback: vec![],
-        },
-        payload_type: 0,
-        ..Default::default()
-    }
-}
