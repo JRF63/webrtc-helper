@@ -6,7 +6,11 @@ use webrtc::rtcp::transport_feedbacks::transport_layer_cc::{
 };
 
 use self::{delay_based::DelayBasedBandwidthEstimator, loss_based::LossBasedBandwidthEstimator};
-use super::sync::{TwccBandwidthEstimate, TwccSendInfo, TwccTime};
+use super::{
+    sync::{TwccBandwidthEstimate, TwccSendInfo},
+    time::TwccTime,
+};
+use crate::util::data_rate::DataRate;
 use std::time::Instant;
 
 pub struct TwccBandwidthEstimator {
@@ -29,12 +33,14 @@ impl TwccBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, now: Instant) {
-        let current_bandwidth = self.estimate.get_estimate_bytes_per_sec() as f64;
+        let current_bandwidth = self.estimate.get_estimate().bytes_per_sec_f64();
         let a = self.delay_based_estimator.estimate(current_bandwidth, now);
         let b = self
             .loss_based_estimator
             .estimate(current_bandwidth, self.received, self.lost);
-        self.estimate.set_estimate_bytes_per_sec(f64::min(a, b));
+        let bandwidth = f64::min(a, b);
+        self.estimate
+            .set_estimate(DataRate::from_bytes_per_sec_f64(bandwidth));
 
         self.received = 0;
         self.lost = 0;

@@ -1,7 +1,10 @@
-use crate::Codec;
+use crate::{codecs::Codec, encoder::Encoder, interceptor::twcc::TwccBandwidthEstimate};
 use async_trait::async_trait;
 use std::any::Any;
-use tokio::sync::Mutex;
+use tokio::sync::{
+    mpsc::{channel, error::TryRecvError, Receiver, Sender},
+    Mutex,
+};
 use webrtc::{
     error::Result,
     rtp_transceiver::rtp_codec::{RTCRtpCodecParameters, RTPCodecType},
@@ -11,31 +14,89 @@ use webrtc::{
     Error,
 };
 
+const CHANNEL_BUFFER_SIZE: usize = 4;
+
+enum TrackLocalEvent {
+    Bind(TrackLocalContext),
+    Unbind(TrackLocalContext),
+}
+
+struct Meow<E>
+where
+    E: Encoder,
+{
+    receiver: Receiver<TrackLocalEvent>,
+    rtp_track: TrackLocalStaticRTP,
+    encoder: E,
+    // bandwidth_estimate: TwccBandwidthEstimate,
+}
+
+impl<E> Meow<E>
+where
+    E: Encoder,
+{
+    async fn encoding_loop(&mut self) {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(event) => {
+                    match event {
+                        TrackLocalEvent::Bind(t) => {
+                            if self.rtp_track.bind(&t).await.is_err() {
+                                // TODO: log error
+                                break;
+                            }
+                        }
+                        TrackLocalEvent::Unbind(t) => {
+                            if self.rtp_track.unbind(&t).await.is_err() {
+                                // TODO: log error
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    // Encode
+                    todo!()
+                }
+                Err(TryRecvError::Disconnected) => {
+                    // Sender closed; exit out of loop
+                    break;
+                }
+            }
+        }
+    }
+}
+
 pub struct CustomTrackLocal {
     codecs: Box<[Codec]>,
+    pair: Mutex<Option<(RTCRtpCodecParameters, Sender<TrackLocalEvent>)>>,
     id: String,
     stream_id: String,
     kind: RTPCodecType,
-    rtp_track: Mutex<Option<TrackLocalStaticRTP>>,
 }
 
 #[async_trait]
 impl TrackLocal for CustomTrackLocal {
     async fn bind(&self, t: &TrackLocalContext) -> Result<RTCRtpCodecParameters> {
-        let mut rtp_track = self.rtp_track.lock().await;
-        if let Some(rtp_track) = &*rtp_track {
-            rtp_track.bind(t).await
+        let mut pair = self.pair.lock().await;
+        if let Some((chosen_codec, sender)) = &*pair {
+            match sender.send(TrackLocalEvent::Bind(t.clone())).await {
+                Ok(_) => Ok(chosen_codec.clone()),
+                Err(_) => Err(Error::ErrUnsupportedCodec),
+            }
         } else {
             for codec in t.codec_parameters() {
                 for supported_codec in self.supported_codecs().iter() {
                     if supported_codec.matches_parameters(codec) {
-                        *rtp_track = Some(TrackLocalStaticRTP::new(
-                            codec.capability.clone(),
-                            self.id.clone(),
-                            self.stream_id.clone(),
-                        ));
-                        if let Some(rtp_track) = &*rtp_track {
-                            return rtp_track.bind(t).await;
+                        let (tx, rx) = channel(CHANNEL_BUFFER_SIZE);
+
+
+
+                        *pair = Some((codec.clone(), tx));
+                        if let Some((chosen_codec, sender)) = &*pair {
+                            if sender.send(TrackLocalEvent::Bind(t.clone())).await.is_ok() {
+                                return Ok(chosen_codec.clone());
+                            }
                         }
                     }
                 }
@@ -45,12 +106,17 @@ impl TrackLocal for CustomTrackLocal {
     }
 
     async fn unbind(&self, t: &TrackLocalContext) -> Result<()> {
-        let rtp_track = self.rtp_track.lock().await;
-        if let Some(rtp_track) = &*rtp_track {
-            rtp_track.unbind(t).await
-        } else {
-            Err(Error::ErrUnbindFailed)
+        let pair = self.pair.lock().await;
+        if let Some((_, sender)) = &*pair {
+            if sender
+                .send(TrackLocalEvent::Unbind(t.clone()))
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
         }
+        Err(Error::ErrUnbindFailed)
     }
 
     fn id(&self) -> &str {
@@ -93,10 +159,10 @@ impl CustomTrackLocal {
 
         Some(CustomTrackLocal {
             codecs: codecs.into_boxed_slice(),
+            pair: Mutex::new(None),
             id,
             stream_id,
             kind,
-            rtp_track: Mutex::new(None),
         })
     }
 

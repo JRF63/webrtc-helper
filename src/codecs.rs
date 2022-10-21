@@ -9,7 +9,8 @@ use webrtc::{
 
 const MIME_TYPE_H264: &str = "video/H264";
 const MIME_TYPE_OPUS: &str = "audio/opus";
-// TODO:
+// TODO H264:
+// See https://www.rfc-editor.org/rfc/rfc7798#section-7.1
 // const MIME_TYPE_H265: &str = "video/H265";
 
 #[derive(Clone)]

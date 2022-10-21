@@ -23,8 +23,14 @@ use webrtc::{
     },
 };
 
+pub enum Role {
+    Offerer,
+    Answerer,
+}
+
 pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
     signaler: S,
+    role: Role,
     receivable_codecs: Vec<Codec>,
     sendable_tracks: Vec<CustomTrackLocal>,
     ice_servers: Vec<RTCIceServer>,
@@ -32,9 +38,10 @@ pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
 }
 
 impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
-    pub fn new(signaler: S) -> Self {
+    pub fn new(signaler: S, role: Role) -> Self {
         WebRtcBuilder {
             signaler,
+            role,
             receivable_codecs: Vec::new(),
             sendable_tracks: Vec::new(),
             ice_servers: Vec::new(),
@@ -94,17 +101,22 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
             bandwidth_estimate,
         });
 
-        let weak_ref = Arc::downgrade(&peer);
-        peer.peer_connection
-            .on_negotiation_needed(Box::new(move || {
-                let peer = weak_ref.clone();
-                Box::pin(async move {
-                    if let Some(peer) = peer.upgrade() {
-                        peer.start_negotiation().await;
-                    }
-                })
-            }))
-            .await;
+        match self.role {
+            Role::Offerer => {
+                let weak_ref = Arc::downgrade(&peer);
+                peer.peer_connection
+                    .on_negotiation_needed(Box::new(move || {
+                        let peer = weak_ref.clone();
+                        Box::pin(async move {
+                            if let Some(peer) = peer.upgrade() {
+                                peer.start_negotiation().await;
+                            }
+                        })
+                    }))
+                    .await;
+            }
+            Role::Answerer => (),
+        }
 
         let weak_ref = Arc::downgrade(&peer);
         peer.peer_connection
@@ -148,7 +160,7 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
             webrtc::error::Result::Ok(())
         });
 
-        // TODO: ICE restart 
+        // TODO: ICE restart
 
         // for (track, _) in self.tracks {
         //     // TODO: tokio::spawn a handler
@@ -167,8 +179,8 @@ pub struct WebRtc<S: Signaler + Send + Sync + 'static> {
 }
 
 impl<S: Signaler + Send + Sync + 'static> WebRtc<S> {
-    pub fn builder(signaler: S) -> WebRtcBuilder<S> {
-        WebRtcBuilder::new(signaler)
+    pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
+        WebRtcBuilder::new(signaler, role)
     }
 
     pub async fn close(&self) {
