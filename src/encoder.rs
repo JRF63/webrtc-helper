@@ -1,6 +1,29 @@
-use crate::util::{time::RtpTimestamp, data_rate::DataRate};
+use crate::{codecs::Codec, interceptor::twcc::TwccBandwidthEstimate};
+use webrtc::{rtp::packet::Packet, rtp_transceiver::rtp_codec::RTCRtpCodecParameters};
 
-pub trait Encoder {
-    fn next_frame(&mut self) -> (&[u8], RtpTimestamp);
-    fn set_data_rate(&mut self, data_rate: DataRate);
+pub trait Encoder: Sized + Send {
+    fn packets(&mut self) -> Box<[Packet]>;
+
+    fn set_mtu(&mut self, mtu: usize);
+}
+
+pub trait EncoderBuilder {
+    type EncoderType: Encoder;
+
+    fn supported_codecs(&self) -> &[Codec];
+
+    fn build(
+        self,
+        codec: &RTCRtpCodecParameters,
+        bandwidth_estimate: TwccBandwidthEstimate,
+    ) -> Self::EncoderType;
+
+    fn is_codec_supported(&self, codec: &RTCRtpCodecParameters) -> bool {
+        for supported_codec in self.supported_codecs() {
+            if supported_codec.matches_parameters(codec) {
+                return true;
+            }
+        }
+        false
+    }
 }

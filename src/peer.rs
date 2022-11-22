@@ -1,8 +1,9 @@
 use crate::{
     codecs::Codec,
-    interceptor::{configure_custom_twcc, twcc::TwccBandwidthEstimate},
+    decoder::Decoder,
+    interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
-    CustomTrackLocal,
+    EncoderTrack,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -21,35 +22,44 @@ use webrtc::{
     peer_connection::{
         configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType, RTCPeerConnection,
     },
+    rtp_transceiver::rtp_receiver::RTCRtpReceiver,
+    track::track_remote::TrackRemote,
 };
+use tokio::sync::Mutex;
 
 pub enum Role {
     Offerer,
     Answerer,
 }
 
-pub struct WebRtcBuilder<S: Signaler + Send + Sync + 'static> {
+pub struct WebRtcBuilder<S>
+where
+    S: Signaler + Send + Sync + 'static,
+{
     signaler: S,
     role: Role,
-    receivable_codecs: Vec<Codec>,
-    sendable_tracks: Vec<CustomTrackLocal>,
+    decoders: Vec<Box<dyn Decoder>>,
+    // senders: Vec<CustomTrackLocal>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
 
-impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
+impl<S> WebRtcBuilder<S>
+where
+    S: Signaler + Send + Sync + 'static,
+{
     pub fn new(signaler: S, role: Role) -> Self {
         WebRtcBuilder {
             signaler,
             role,
-            receivable_codecs: Vec::new(),
-            sendable_tracks: Vec::new(),
+            decoders: Vec::new(),
+            // encoders: Vec::new(),
             ice_servers: Vec::new(),
             mdns: false,
         }
     }
 
-    pub async fn build(mut self) -> webrtc::error::Result<Arc<WebRtc<S>>> {
+    pub async fn build(self) -> webrtc::error::Result<Arc<WebRtc<S>>> {
         let mut media_engine = MediaEngine::default();
         {
             const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
@@ -57,11 +67,13 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
             let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
 
             let mut codecs = Vec::new();
-            codecs.append(&mut self.receivable_codecs);
-
-            for track in self.sendable_tracks.iter() {
-                codecs.extend_from_slice(track.supported_codecs());
+            for decoder in self.decoders.iter() {
+                codecs.extend_from_slice(decoder.supported_codecs());
             }
+
+            // for track in self.sendable_tracks.iter() {
+            //     codecs.extend_from_slice(track.supported_codecs());
+            // }
 
             for mut codec in codecs {
                 if let Some(payload_type) = payload_id {
@@ -98,7 +110,6 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
                 .await?,
             signaler: self.signaler,
             closed: AtomicBool::new(false),
-            bandwidth_estimate,
         });
 
         match self.role {
@@ -160,6 +171,34 @@ impl<S: Signaler + Send + Sync + 'static> WebRtcBuilder<S> {
             webrtc::error::Result::Ok(())
         });
 
+        let decoders = Arc::new(Mutex::new(self.decoders));
+        peer.peer_connection
+            .on_track(Box::new(
+                move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
+                    let (Some(track), Some(receiver)) = (track, receiver) else {
+                        return Box::pin(async move {});
+                    };
+
+                    let decoders = decoders.clone();
+
+                    Box::pin(async move {
+                        let codec = track.codec().await;
+                        let mut decoders = decoders.lock().await;
+                        let mut matched_index = None;
+                        for (index, decoder) in decoders.iter().enumerate() {
+                            if decoder.is_codec_supported(&codec) {
+                                matched_index = Some(index);
+                            }
+                        }
+                        if let Some(index) = matched_index {
+                            let decoder = decoders.swap_remove(index);
+                            decoder.build(track, receiver);
+                        }
+                    })
+                },
+            ))
+            .await;
+
         // TODO: ICE restart
 
         // for (track, _) in self.tracks {
@@ -175,7 +214,6 @@ pub struct WebRtc<S: Signaler + Send + Sync + 'static> {
     peer_connection: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
-    bandwidth_estimate: TwccBandwidthEstimate,
 }
 
 impl<S: Signaler + Send + Sync + 'static> WebRtc<S> {
