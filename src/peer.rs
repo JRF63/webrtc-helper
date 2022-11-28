@@ -1,9 +1,9 @@
 use crate::{
     codecs::Codec,
-    decoder::Decoder,
+    decoder::DecoderBuilder,
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
-    EncoderTrack,
+    EncoderTrackLocal,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -38,7 +38,7 @@ where
 {
     signaler: S,
     role: Role,
-    decoders: Vec<Box<dyn Decoder>>,
+    decoders: Vec<Box<dyn DecoderBuilder>>,
     // senders: Vec<CustomTrackLocal>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
@@ -52,8 +52,8 @@ where
         WebRtcBuilder {
             signaler,
             role,
-            decoders: Vec::new(),
             // encoders: Vec::new(),
+            decoders: Vec::new(),
             ice_servers: Vec::new(),
             mdns: false,
         }

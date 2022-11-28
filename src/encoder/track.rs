@@ -1,7 +1,5 @@
-use crate::{
-    encoder::{EncoderBuilder, TrackLocalEvent},
-    interceptor::twcc::TwccBandwidthEstimate,
-};
+use super::{EncoderBuilder, TrackLocalEvent};
+use crate::interceptor::twcc::TwccBandwidthEstimate;
 use async_trait::async_trait;
 use std::{any::Any, ops::DerefMut};
 use tokio::sync::{

@@ -11,5 +11,5 @@ pub mod util;
 // #[cfg(test)]
 mod mock;
 
-pub use encoder_track::EncoderTrack;
+pub use encoder_track::EncoderTrackLocal;
 pub use peer::WebRtc;

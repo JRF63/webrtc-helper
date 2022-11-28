@@ -1,3 +1,4 @@
+#[derive(Clone, Copy, PartialEq, Default)]
 pub struct DataRate(f64);
 
 impl DataRate {
@@ -23,11 +24,11 @@ impl DataRate {
 
     #[inline]
     pub(crate) fn as_blob(&self) -> u64 {
-        u64::from_ne_bytes(self.0.to_ne_bytes())
+        u64::from_le_bytes(self.0.to_le_bytes())
     }
 
     #[inline]
     pub(crate) fn from_blob(blob: u64) -> DataRate {
-        DataRate(f64::from_ne_bytes(blob.to_ne_bytes()))
+        DataRate(f64::from_le_bytes(blob.to_le_bytes()))
     }
 }
