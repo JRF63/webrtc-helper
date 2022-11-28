@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
+use tokio::sync::Mutex;
 use webrtc::{
     api::{
         interceptor_registry::{configure_nack, configure_rtcp_reports},
@@ -25,7 +26,6 @@ use webrtc::{
     rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
 };
-use tokio::sync::Mutex;
 
 pub enum Role {
     Offerer,
@@ -64,8 +64,6 @@ where
         {
             const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
 
-            let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
-
             let mut codecs = Vec::new();
             for decoder in self.decoders.iter() {
                 codecs.extend_from_slice(decoder.supported_codecs());
@@ -75,10 +73,12 @@ where
             //     codecs.extend_from_slice(track.supported_codecs());
             // }
 
-            for mut codec in codecs {
+            let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
+
+            for codec in codecs {
                 if let Some(payload_type) = payload_id {
-                    codec.set_payload_type(payload_type);
-                    let num_registered = codec.register_to_media_engine(&mut media_engine)?;
+                    let num_registered =
+                        codec.register_to_media_engine(&mut media_engine, payload_type)?;
                     payload_id = payload_type.checked_add(num_registered);
                 } else {
                     panic!("Registered too many codecs");

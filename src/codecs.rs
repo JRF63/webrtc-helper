@@ -20,33 +20,70 @@ pub struct Codec {
 }
 
 impl Codec {
-    pub(crate) fn set_payload_type(&mut self, payload_type: u8) {
-        self.parameters.payload_type = payload_type;
-    }
+    // pub(crate) fn set_payload_type(&mut self, payload_type: u8) {
+    //     self.parameters.payload_type = payload_type;
+    // }
+
+    // /// Configure the media engine to use the codec and returns the number of codecs registered.
+    // pub(crate) fn register_to_media_engine(&self, media_engine: &mut MediaEngine) -> Result<u8> {
+    //     media_engine.register_codec(self.parameters.clone(), self.kind)?;
+    //     if self.kind == RTPCodecType::Video {
+    //         let rfc4588_payload_type = self.parameters.payload_type.checked_add(1);
+    //         if let Some(payload_type) = rfc4588_payload_type {
+    //             let rfc4588_params = RTCRtpCodecParameters {
+    //                 capability: RTCRtpCodecCapability {
+    //                     mime_type: "video/rtx".to_owned(),
+    //                     clock_rate: 90000,
+    //                     channels: 0,
+    //                     sdp_fmtp_line: format!("apt={}", self.parameters.payload_type),
+    //                     rtcp_feedback: Vec::new(),
+    //                 },
+    //                 payload_type,
+    //                 ..Default::default()
+    //             };
+    //             media_engine.register_codec(rfc4588_params, RTPCodecType::Video)?;
+    //             Ok(2)
+    //         } else {
+    //             // u8 overflowed
+    //             panic!("Registered too many codecs");
+    //         }
+    //     } else {
+    //         Ok(1)
+    //     }
+    // }
 
     /// Configure the media engine to use the codec and returns the number of codecs registered.
-    pub(crate) fn register_to_media_engine(&self, media_engine: &mut MediaEngine) -> Result<u8> {
-        media_engine.register_codec(self.parameters.clone(), self.kind)?;
+    pub(crate) fn register_to_media_engine(
+        &self,
+        media_engine: &mut MediaEngine,
+        payload_type: u8,
+    ) -> Result<u8> {
+
+        // Register the codec itself
+        media_engine.register_codec(
+            RTCRtpCodecParameters {
+                payload_type,
+                ..self.parameters.clone()
+            },
+            self.kind,
+        )?;
+
+        // If video, also register for retransmission
         if self.kind == RTPCodecType::Video {
-            let rfc4588_payload_type = self.parameters.payload_type.checked_add(1);
-            if let Some(payload_type) = rfc4588_payload_type {
-                let rfc4588_params = RTCRtpCodecParameters {
-                    capability: RTCRtpCodecCapability {
-                        mime_type: "video/rtx".to_owned(),
-                        clock_rate: 90000,
-                        channels: 0,
-                        sdp_fmtp_line: format!("apt={}", self.parameters.payload_type),
-                        rtcp_feedback: vec![],
-                    },
-                    payload_type,
-                    ..Default::default()
-                };
-                media_engine.register_codec(rfc4588_params, RTPCodecType::Video)?;
-                Ok(2)
-            } else {
-                // u8 overflowed
-                panic!("Registered too many codecs");
-            }
+            let rfc4588_payload_type = payload_type.wrapping_add(1);
+            // Parameters needs to have the same clockrate as the video to be retransmitted
+            let rfc4588_params = RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: "video/rtx".to_owned(),
+                    sdp_fmtp_line: format!("apt={}", payload_type),
+                    rtcp_feedback: Vec::new(),
+                    ..self.parameters.clone().capability
+                },
+                payload_type: rfc4588_payload_type,
+                ..Default::default()
+            };
+            media_engine.register_codec(rfc4588_params, RTPCodecType::Video)?;
+            Ok(2)
         } else {
             Ok(1)
         }
@@ -55,11 +92,8 @@ impl Codec {
     pub(crate) fn kind(&self) -> RTPCodecType {
         self.kind
     }
-    
-    pub(crate) fn matches_parameters(
-        &self,
-        parameters: &RTCRtpCodecParameters,
-    ) -> bool {
+
+    pub(crate) fn matches_parameters(&self, parameters: &RTCRtpCodecParameters) -> bool {
         self.parameters.capability == parameters.capability
     }
 
@@ -70,7 +104,7 @@ impl Codec {
                 clock_rate: 48000,
                 channels: 2,
                 sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
-                rtcp_feedback: vec![],
+                rtcp_feedback: Vec::new(),
             },
             payload_type: 0,
             ..Default::default()
@@ -156,7 +190,7 @@ fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
 //             clock_rate: 90000,
 //             channels: 0,
 //             sdp_fmtp_line: "".to_owned(),
-//             rtcp_feedback: vec![],
+//             rtcp_feedback: Vec::new(),
 //         },
 //         payload_type: 0,
 //         ..Default::default()
