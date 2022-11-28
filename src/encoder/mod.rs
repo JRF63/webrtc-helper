@@ -1,5 +1,6 @@
 mod track;
 
+pub use self::track::EncoderTrackLocal;
 use crate::{codecs::Codec, interceptor::twcc::TwccBandwidthEstimate, util::data_rate::DataRate};
 use tokio::sync::mpsc::{error::TryRecvError, Receiver};
 use webrtc::{
@@ -17,6 +18,10 @@ pub enum TrackLocalEvent {
 }
 
 pub trait EncoderBuilder: Send {
+    fn id(&self) -> &str;
+
+    fn stream_id(&self) -> &str;
+
     fn supported_codecs(&self) -> &[Codec];
 
     fn build(self: Box<Self>, codec: &RTCRtpCodecParameters) -> Box<dyn Encoder>;
@@ -45,6 +50,7 @@ pub trait Encoder: Send {
         rtp_track: TrackLocalStaticRTP,
         bandwidth_estimate: TwccBandwidthEstimate,
     ) where
+        // TODO: Why 'static??
         Self: 'static,
     {
         tokio::spawn(async move {

@@ -110,8 +110,6 @@ impl TrackLocal for EncoderTrackLocal {
 impl EncoderTrackLocal {
     pub fn new(
         encoder_builder: Box<dyn EncoderBuilder>,
-        id: String,
-        stream_id: String,
         bandwidth_estimate: TwccBandwidthEstimate,
     ) -> Option<EncoderTrackLocal> {
         let codecs = encoder_builder.supported_codecs();
@@ -132,6 +130,9 @@ impl EncoderTrackLocal {
             (0, _) => RTPCodecType::Video,
             _ => return None,
         };
+
+        let id = encoder_builder.id().to_owned();
+        let stream_id = encoder_builder.stream_id().to_owned();
 
         Some(EncoderTrackLocal {
             data: Mutex::new(TrackLocalData::Builder(encoder_builder)),

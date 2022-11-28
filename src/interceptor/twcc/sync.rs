@@ -1,12 +1,9 @@
-use std::{
-    sync::{
-        atomic::{AtomicI64, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
 use super::time::TwccTime;
 use crate::util::data_rate::DataRate;
+use std::sync::{
+    atomic::{AtomicI64, AtomicU64, Ordering},
+    Arc,
+};
 
 // To be able to index in the range [0, u16::MAX]
 const TWCC_ARRAY_SIZE: usize = (u16::MAX as usize) + 1;

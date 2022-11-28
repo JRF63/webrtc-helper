@@ -1,9 +1,9 @@
 use crate::{
     codecs::Codec,
     decoder::DecoderBuilder,
+    encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
-    EncoderTrackLocal,
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,7 +23,10 @@ use webrtc::{
     peer_connection::{
         configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType, RTCPeerConnection,
     },
-    rtp_transceiver::rtp_receiver::RTCRtpReceiver,
+    rtp_transceiver::{
+        rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
+        RTCRtpTransceiverInit,
+    },
     track::track_remote::TrackRemote,
 };
 
@@ -38,8 +41,8 @@ where
 {
     signaler: S,
     role: Role,
+    encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
-    // senders: Vec<CustomTrackLocal>,
     ice_servers: Vec<RTCIceServer>,
     mdns: bool,
 }
@@ -52,26 +55,40 @@ where
         WebRtcBuilder {
             signaler,
             role,
-            // encoders: Vec::new(),
+            encoders: Vec::new(),
             decoders: Vec::new(),
             ice_servers: Vec::new(),
             mdns: false,
         }
     }
 
-    pub async fn build(self) -> webrtc::error::Result<Arc<WebRtc<S>>> {
+    pub fn with_encoder(&mut self, encoder: Box<dyn EncoderBuilder>) -> &mut Self {
+        self.encoders.push(encoder);
+        self
+    }
+
+    pub fn with_decoder(&mut self, decoder: Box<dyn DecoderBuilder>) -> &mut Self {
+        self.decoders.push(decoder);
+        self
+    }
+
+    pub fn with_ice_server(&mut self, ice_server: RTCIceServer) -> &mut Self {
+        self.ice_servers.push(ice_server);
+        self
+    }
+
+    pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer<S>>> {
         let mut media_engine = MediaEngine::default();
         {
             const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
 
             let mut codecs = Vec::new();
+            for encoder in self.encoders.iter() {
+                codecs.extend_from_slice(encoder.supported_codecs());
+            }
             for decoder in self.decoders.iter() {
                 codecs.extend_from_slice(decoder.supported_codecs());
             }
-
-            // for track in self.sendable_tracks.iter() {
-            //     codecs.extend_from_slice(track.supported_codecs());
-            // }
 
             let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
 
@@ -101,7 +118,7 @@ where
             .with_setting_engine(setting_engine)
             .build();
 
-        let peer = Arc::new(WebRtc {
+        let peer = Arc::new(WebRtcPeer {
             peer_connection: api_builder
                 .new_peer_connection(RTCConfiguration {
                     ice_servers: self.ice_servers,
@@ -199,24 +216,37 @@ where
             ))
             .await;
 
-        // TODO: ICE restart
+        for encoder_builder in self.encoders {
+            if let Some(track) = EncoderTrackLocal::new(encoder_builder, bandwidth_estimate.clone())
+            {
+                let track = Arc::new(track);
+                peer.peer_connection
+                    .add_transceiver_from_track(
+                        track,
+                        &[RTCRtpTransceiverInit {
+                            direction: RTCRtpTransceiverDirection::Sendonly,
+                            send_encodings: Vec::new(),
+                        }],
+                    )
+                    .await?;
+            } else {
+                // TODO: log error
+            }
+        }
 
-        // for (track, _) in self.tracks {
-        //     // TODO: tokio::spawn a handler
-        //     let _rtp_sender = peer_connection.add_track(track as _).await?;
-        // }
+        // TODO: ICE restart
 
         Ok(peer)
     }
 }
 
-pub struct WebRtc<S: Signaler + Send + Sync + 'static> {
+pub struct WebRtcPeer<S: Signaler + Send + Sync + 'static> {
     peer_connection: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
 }
 
-impl<S: Signaler + Send + Sync + 'static> WebRtc<S> {
+impl<S: Signaler + Send + Sync + 'static> WebRtcPeer<S> {
     pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
         WebRtcBuilder::new(signaler, role)
     }
