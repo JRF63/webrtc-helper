@@ -1,5 +1,4 @@
 use crate::{
-    codecs::Codec,
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,
@@ -37,7 +36,7 @@ pub enum Role {
 
 pub struct WebRtcBuilder<S>
 where
-    S: Signaler + Send + Sync + 'static,
+    S: Signaler + 'static,
 {
     signaler: S,
     role: Role,
@@ -49,7 +48,7 @@ where
 
 impl<S> WebRtcBuilder<S>
 where
-    S: Signaler + Send + Sync + 'static,
+    S: Signaler + 'static,
 {
     pub fn new(signaler: S, role: Role) -> Self {
         WebRtcBuilder {
@@ -240,13 +239,13 @@ where
     }
 }
 
-pub struct WebRtcPeer<S: Signaler + Send + Sync + 'static> {
+pub struct WebRtcPeer<S: Signaler + 'static> {
     peer_connection: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
 }
 
-impl<S: Signaler + Send + Sync + 'static> WebRtcPeer<S> {
+impl<S: Signaler + 'static> WebRtcPeer<S> {
     pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
         WebRtcBuilder::new(signaler, role)
     }

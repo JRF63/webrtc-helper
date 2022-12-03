@@ -58,7 +58,7 @@ impl TrackLocal for EncoderTrackLocal {
                         std::mem::swap(data.deref_mut(), &mut sender);
 
                         if let TrackLocalData::Builder(builder) = sender {
-                            let encoder = builder.build(codec);
+                            let encoder = builder.build(codec, t);
                             encoder.start(rx, rtp_track, self.bandwidth_estimate.clone());
                         }
 

@@ -11,7 +11,7 @@ pub enum Message {
 }
 
 #[async_trait]
-pub trait Signaler {
+pub trait Signaler: Send + Sync {
     async fn recv(&self) -> std::io::Result<Message>;
     async fn send(&self, msg: Message) -> std::io::Result<()>;
 }

@@ -20,37 +20,10 @@ pub struct Codec {
 }
 
 impl Codec {
-    // pub(crate) fn set_payload_type(&mut self, payload_type: u8) {
-    //     self.parameters.payload_type = payload_type;
-    // }
-
-    // /// Configure the media engine to use the codec and returns the number of codecs registered.
-    // pub(crate) fn register_to_media_engine(&self, media_engine: &mut MediaEngine) -> Result<u8> {
-    //     media_engine.register_codec(self.parameters.clone(), self.kind)?;
-    //     if self.kind == RTPCodecType::Video {
-    //         let rfc4588_payload_type = self.parameters.payload_type.checked_add(1);
-    //         if let Some(payload_type) = rfc4588_payload_type {
-    //             let rfc4588_params = RTCRtpCodecParameters {
-    //                 capability: RTCRtpCodecCapability {
-    //                     mime_type: "video/rtx".to_owned(),
-    //                     clock_rate: 90000,
-    //                     channels: 0,
-    //                     sdp_fmtp_line: format!("apt={}", self.parameters.payload_type),
-    //                     rtcp_feedback: Vec::new(),
-    //                 },
-    //                 payload_type,
-    //                 ..Default::default()
-    //             };
-    //             media_engine.register_codec(rfc4588_params, RTPCodecType::Video)?;
-    //             Ok(2)
-    //         } else {
-    //             // u8 overflowed
-    //             panic!("Registered too many codecs");
-    //         }
-    //     } else {
-    //         Ok(1)
-    //     }
-    // }
+    /// Create a new `Codec`.
+    pub fn new(parameters: RTCRtpCodecParameters, kind: RTPCodecType) -> Codec {
+        Codec { parameters, kind }
+    }
 
     /// Configure the media engine to use the codec and returns the number of codecs registered.
     pub(crate) fn register_to_media_engine(
@@ -58,7 +31,6 @@ impl Codec {
         media_engine: &mut MediaEngine,
         payload_type: u8,
     ) -> Result<u8> {
-
         // Register the codec itself
         media_engine.register_codec(
             RTCRtpCodecParameters {
@@ -158,7 +130,7 @@ impl Codec {
 }
 
 /// RTCP feedbacks that can be handled either by this crate or natively by webrtc-rs.
-fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
+pub(crate) fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
     // "goog-remb" is replaced with "transport-cc"
     // https://github.com/webrtc-rs/webrtc/blob/c30b5c1db4668bb1314f32e0121270e1bb1dac7a/webrtc/src/api/media_engine/mod.rs#L138
     vec![

@@ -14,7 +14,12 @@ impl DataRate {
 
     #[inline]
     pub fn bits_per_sec(&self) -> u64 {
-        (self.0 * 8.0) as u64
+        self.bytes_per_sec() * 8
+    }
+
+    #[inline]
+    pub fn bytes_per_sec(&self) -> u64 {
+        self.0 as u64
     }
 
     #[inline]
