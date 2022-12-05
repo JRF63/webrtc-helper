@@ -8,11 +8,11 @@ use webrtc::{
 };
 
 pub fn configure_custom_twcc(
-    registry: Registry,
+    mut registry: Registry,
     media_engine: &mut MediaEngine,
 ) -> Result<(Registry, TwccBandwidthEstimate)> {
-    let mut registry = configure_twcc(registry, media_engine)?;
     let (builder, estimate) = TwccInterceptorBuilder::new();
     registry.add(Box::new(builder));
+    let registry = configure_twcc(registry, media_engine)?;
     Ok((registry, estimate))
 }

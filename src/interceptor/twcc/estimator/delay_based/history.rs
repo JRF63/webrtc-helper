@@ -96,7 +96,8 @@ impl History {
         let start = self.data.front()?.arrival_time_us;
         let end = self.data.back()?.arrival_time_us;
         let timespan = end.sub_assuming_small_delta(start);
-        Some(self.total_packet_size_bytes as f64 / timespan as f64)
+        // Timespan is in microseconds so multiply by 1e6
+        Some(1e6 * self.total_packet_size_bytes as f64 / timespan as f64)
     }
 
     /// Used for computing f_max in the arrival-time filter

@@ -60,6 +60,7 @@ impl DelayThreshold {
     }
 }
 
+#[derive(Debug)]
 pub enum NetworkCondition {
     Underuse,
     Normal,

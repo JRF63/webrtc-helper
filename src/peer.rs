@@ -26,7 +26,7 @@ use webrtc::{
         rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
         RTCRtpTransceiverInit,
     },
-    track::track_remote::TrackRemote,
+    track::track_remote::TrackRemote, rtcp::{receiver_report::ReceiverReport, transport_feedbacks::transport_layer_cc::TransportLayerCc},
 };
 
 pub enum Role {
@@ -219,7 +219,8 @@ where
             if let Some(track) = EncoderTrackLocal::new(encoder_builder, bandwidth_estimate.clone())
             {
                 let track = Arc::new(track);
-                peer.peer_connection
+                let transceiver = peer
+                    .peer_connection
                     .add_transceiver_from_track(
                         track,
                         &[RTCRtpTransceiverInit {
@@ -228,6 +229,13 @@ where
                         }],
                     )
                     .await?;
+
+                if let Some(sender) = transceiver.sender().await {
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 1500];
+                        while let Ok(_) = sender.read(&mut buf).await {}
+                    });
+                }
             } else {
                 // TODO: log error
             }

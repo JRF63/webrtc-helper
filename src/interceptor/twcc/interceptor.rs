@@ -49,7 +49,10 @@ impl RTCPReader for TwccStream {
     ) -> Result<(usize, Attributes), Error> {
         let now = Instant::now();
 
-        let packets = rtcp::packet::unmarshal(&mut &buf[..])?;
+        let (n, attr) = self.next_reader.read(buf, attributes).await?;
+
+        let mut b = &buf[..n];
+        let packets = rtcp::packet::unmarshal(&mut b)?;
         for packet in packets {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
@@ -78,7 +81,7 @@ impl RTCPReader for TwccStream {
             bandwidth_estimator.estimate(now);
         }
 
-        self.next_reader.read(buf, attributes).await
+        Ok((n, attr))
     }
 }
 
