@@ -1,10 +1,18 @@
 use webrtc::{rtp_transceiver::rtp_receiver::RTCRtpReceiver, track::track_remote::TrackRemote};
 
 use crate::{codecs::Codec, decoder::DecoderBuilder};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 pub struct MockDecoderBuilder {
     codecs: Vec<Codec>,
+}
+
+impl MockDecoderBuilder {
+    pub fn new() -> Self {
+        Self {
+            codecs: vec![super::codec::mock_codec()]
+        }
+    }
 }
 
 impl DecoderBuilder for MockDecoderBuilder {
@@ -19,8 +27,27 @@ impl DecoderBuilder for MockDecoderBuilder {
                 .build()
                 .unwrap()
                 .block_on(async move {
+                    let start = Instant::now();
+                    let mut data = Vec::new();
+
                     let mut buffer = vec![0; 1500];
-                    while let Ok(_) = track.read(&mut buffer).await {}
+                    while let Ok((bytes, _)) = track.read(&mut buffer).await {
+                        let duration = Instant::now().duration_since(start);
+                        let timestamp = duration.as_millis() / 5000;
+                        data.push((bytes, timestamp as u64));
+                    }
+
+                    let (_, start) = data.first().unwrap();
+                    let (_, end) = data.last().unwrap();
+
+                    let mut total_bytes = 0;
+                    for (bytes, _) in &data {
+                        total_bytes += bytes;
+                    }
+
+                    // bytes per second
+                    let average_bitrate = total_bytes as f64 / (1000.0 * (end - start) as f64);
+                    println!("Bitrate: {average_bitrate} Bps");
                 })
         });
     }

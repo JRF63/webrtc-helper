@@ -7,7 +7,7 @@ mod peer;
 mod signaling;
 pub mod util;
 
-// #[cfg(test)]
+#[cfg(test)]
 mod mock;
 
 pub use peer::WebRtcPeer;

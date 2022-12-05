@@ -66,7 +66,15 @@ impl Codec {
     }
 
     pub(crate) fn matches_parameters(&self, parameters: &RTCRtpCodecParameters) -> bool {
-        self.parameters.capability == parameters.capability
+        // All parameters except `rtcp_feedback` should match
+        let codec_matches = |a: &RTCRtpCodecCapability, b: &RTCRtpCodecCapability| {
+            a.mime_type == b.mime_type
+                && a.clock_rate == b.clock_rate
+                && a.channels == b.channels
+                && a.sdp_fmtp_line == b.sdp_fmtp_line
+        };
+
+        codec_matches(&self.parameters.capability, &parameters.capability)
     }
 
     pub fn opus() -> Codec {
@@ -134,22 +142,22 @@ pub(crate) fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
     // "goog-remb" is replaced with "transport-cc"
     // https://github.com/webrtc-rs/webrtc/blob/c30b5c1db4668bb1314f32e0121270e1bb1dac7a/webrtc/src/api/media_engine/mod.rs#L138
     vec![
-        RTCPFeedback {
-            typ: "transport-cc".to_owned(),
-            parameter: "".to_owned(),
-        },
+        // RTCPFeedback {
+        //     typ: "transport-cc".to_owned(),
+        //     parameter: "".to_owned(),
+        // },
         RTCPFeedback {
             typ: "ccm".to_owned(),
             parameter: "fir".to_owned(),
         },
-        RTCPFeedback {
-            typ: "nack".to_owned(),
-            parameter: "".to_owned(),
-        },
-        RTCPFeedback {
-            typ: "nack".to_owned(),
-            parameter: "pli".to_owned(),
-        },
+        // RTCPFeedback {
+        //     typ: "nack".to_owned(),
+        //     parameter: "".to_owned(),
+        // },
+        // RTCPFeedback {
+        //     typ: "nack".to_owned(),
+        //     parameter: "pli".to_owned(),
+        // },
     ]
 }
 

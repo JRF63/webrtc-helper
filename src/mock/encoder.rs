@@ -19,6 +19,14 @@ pub struct MockEncoderBuilder {
     codecs: Vec<Codec>,
 }
 
+impl MockEncoderBuilder {
+    pub fn new() -> Self {
+        Self {
+            codecs: vec![super::codec::mock_codec()]
+        }
+    }
+}
+
 impl EncoderBuilder for MockEncoderBuilder {
     fn id(&self) -> &str {
         "mock-video"
