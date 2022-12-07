@@ -15,9 +15,7 @@ async fn mock_test() {
         let mut encoder_builder = WebRtcBuilder::new(encoder_signaler, Role::Offerer);
         encoder_builder.with_encoder(Box::new(MockEncoderBuilder::new()));
         let encoder = encoder_builder.build().await.unwrap();
-        for _ in 0..300 {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
         encoder.close().await;
     });
 
@@ -25,8 +23,8 @@ async fn mock_test() {
         let mut decoder_builder = WebRtcBuilder::new(decoder_signaler, Role::Answerer);
         decoder_builder.with_decoder(Box::new(MockDecoderBuilder::new()));
         let decoder = decoder_builder.build().await.unwrap();
-        if !decoder.is_closed() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        while !decoder.is_closed() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });
 

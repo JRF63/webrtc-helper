@@ -5,17 +5,19 @@ use std::sync::{
     Arc,
 };
 
-// To be able to index in the range [0, u16::MAX]
+/// Exact sized needed to be able to index in the range [0, u16::MAX]
 const TWCC_ARRAY_SIZE: usize = (u16::MAX as usize) + 1;
 
+/// TWCC data structure for storing the timestamp and size of each packet sent.
+///
 // Box<[T; N]> is used instead of Vec<T> or Box<[T]> to help the compiler to elide-out the bounds
-// check when indexing with a u16.
+// check when indexing with a u16. `TwccSendInfo` requires approx. ~1 MB of heap memory.
 #[derive(Clone)]
 #[repr(transparent)]
 pub struct TwccSendInfo(Arc<Box<[(AtomicI64, AtomicU64); TWCC_ARRAY_SIZE]>>);
 
 impl TwccSendInfo {
-    // This allocates a relatively large ~1 MB fixed-size array
+    /// Create a new `TwccSendInfo`.
     pub fn new() -> TwccSendInfo {
         let mut vec = Vec::new();
         vec.reserve_exact(TWCC_ARRAY_SIZE);
@@ -28,14 +30,16 @@ impl TwccSendInfo {
         TwccSendInfo(Arc::new(boxed_array))
     }
 
-    pub fn store(&self, index: u16, timestamp: TwccTime, packet_size: u64) {
-        let (a, b) = &self.0[index as usize];
+    /// Stores the timestamp and packet size of the packet.
+    pub fn store_send_info(&self, seq_num: u16, timestamp: TwccTime, packet_size: u64) {
+        let (a, b) = &self.0[seq_num as usize];
         a.store(timestamp.as_raw(), Ordering::Release);
         b.store(packet_size, Ordering::Release);
     }
 
-    pub fn load(&self, index: u16) -> (TwccTime, u64) {
-        let (a, b) = &self.0[index as usize];
+    /// Load the timestamp and packet size for the packet with the given sequence number.
+    pub fn load_send_info(&self, seq_num: u16) -> (TwccTime, u64) {
+        let (a, b) = &self.0[seq_num as usize];
         (
             TwccTime::from_raw(a.load(Ordering::Acquire)),
             b.load(Ordering::Acquire),
@@ -49,8 +53,8 @@ pub struct TwccBandwidthEstimate(Arc<AtomicU64>);
 
 impl TwccBandwidthEstimate {
     pub fn new() -> TwccBandwidthEstimate {
-        // 256 Kbps
-        const INITIAL_BANDWIDTH: u64 = 256_000;
+        // 1 Mbps
+        const INITIAL_BANDWIDTH: u64 = 20_000_000;
 
         TwccBandwidthEstimate(Arc::new(AtomicU64::new(
             DataRate::from_bits_per_sec(INITIAL_BANDWIDTH).as_blob(),

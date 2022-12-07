@@ -65,7 +65,7 @@ impl TwccBandwidthEstimator {
                     if let Some(recv_delta) = recv_deltas_iter.next() {
                         arrival_time = TwccTime::from_recv_delta(arrival_time, recv_delta);
 
-                        let (departure_time, packet_size) = send_info.load(sequence_number);
+                        let (departure_time, packet_size) = send_info.load_send_info(sequence_number);
 
                         self.delay_based_estimator.process_packet(
                             departure_time,

@@ -72,6 +72,8 @@ pub trait Encoder: Send {
                 .block_on(async move {
                     let mut data_rate = DataRate::default();
 
+                    let mut i = 0;
+
                     // TODO: Check if the calls to `packets` and `set_data_rate` passes through a v-table.
                     loop {
                         match receiver.try_recv() {
@@ -85,6 +87,10 @@ pub trait Encoder: Send {
                                 // Encode
                                 let new_data_rate = bandwidth_estimate.get_estimate();
                                 if new_data_rate != data_rate {
+                                    if i % 10 == 0 {
+                                        println!("data_rate: {}", new_data_rate.bytes_per_sec_f64() as u64);
+                                    }
+                                    i += 1;
                                     data_rate = new_data_rate;
                                     self.set_data_rate(data_rate);
                                 }

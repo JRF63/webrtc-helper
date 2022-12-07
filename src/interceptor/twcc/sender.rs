@@ -45,7 +45,7 @@ impl RTPWriter for TwccTimestampSenderStream {
 
             let tcc_ext = TransportCcExtension::unmarshal(&mut buf)?;
             let timestamp = Instant::now().duration_since(self.start_time);
-            self.map.store(
+            self.map.store_send_info(
                 tcc_ext.transport_sequence,
                 TwccTime::from_duration(&timestamp),
                 payload_size,

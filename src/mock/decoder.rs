@@ -35,20 +35,20 @@ impl DecoderBuilder for MockDecoderBuilder {
 
                     let mut buffer = vec![0; 1500];
 
-                    let sleep = tokio::time::sleep(Duration::from_secs(25));
-                    tokio::pin!(sleep);
+                    // let sleep = tokio::time::sleep(Duration::from_secs(5));
+                    // tokio::pin!(sleep);
                     loop {
                         tokio::select! {
                             read_result = track.read(&mut buffer) => {
                                 if let Ok((bytes, _)) = read_result {
                                     let duration = Instant::now().duration_since(start);
-                                    let timestamp = duration.as_millis() / 5000;
+                                    let timestamp = duration.as_millis();
                                     data.push((bytes, timestamp as u64));
                                 } else {
                                     break;
                                 }
                             }
-                            _ = &mut sleep => {
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
                                 break;
                             }
                         }
@@ -62,10 +62,10 @@ impl DecoderBuilder for MockDecoderBuilder {
                         total_bytes += bytes;
                     }
 
-                    // bytes per millisecond
-                    let average_bitrate = 1000.0 * total_bytes as f64 / (end - start) as f64;
-                    let bitrate_mbps = average_bitrate / 1e6;
-                    println!("Bitrate: {bitrate_mbps} MBps");
+                    let elapsed = (end - start) as f64 / 1e3;
+                    // bytes per sec
+                    let average_bitrate = total_bytes as f64 / elapsed;
+                    println!("Bitrate: {average_bitrate} Bps, Elapsed: {elapsed}");
                 })
         });
     }

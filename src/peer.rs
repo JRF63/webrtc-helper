@@ -26,7 +26,7 @@ use webrtc::{
         rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
         RTCRtpTransceiverInit,
     },
-    track::track_remote::TrackRemote, rtcp::{receiver_report::ReceiverReport, transport_feedbacks::transport_layer_cc::TransportLayerCc},
+    track::track_remote::TrackRemote,
 };
 
 pub enum Role {
@@ -180,7 +180,10 @@ where
                                 .add_ice_candidate(candidate.to_json().await?)
                                 .await?;
                         }
-                        Message::Bye => break,
+                        Message::Bye => {
+                            peer.close().await;
+                            break;
+                        }
                     }
                 }
             }

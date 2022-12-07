@@ -4,7 +4,7 @@ use crate::{
     util::data_rate::DataRate,
 };
 use bytes::Bytes;
-use std::time::{Duration, Instant};
+use std::time::{Instant, Duration};
 use webrtc::{
     rtp::{
         header::Header,
@@ -22,7 +22,7 @@ pub struct MockEncoderBuilder {
 impl MockEncoderBuilder {
     pub fn new() -> Self {
         Self {
-            codecs: vec![super::codec::mock_codec()]
+            codecs: vec![super::codec::mock_codec()],
         }
     }
 }
@@ -49,13 +49,13 @@ impl EncoderBuilder for MockEncoderBuilder {
             const RTP_OUTBOUND_MTU: usize = 1200;
 
             let encoder = MockEncoder {
-                mtu: RTP_OUTBOUND_MTU,
+                payload_type: codec_params.payload_type,
+                ssrc: context.ssrc(),
+                sequencer: Box::new(new_random_sequencer()),
                 start: (Instant::now(), 0),
                 clock_rate: 90000,
-                time: Instant::now(),
-                payload_type: codec_params.payload_type,
-                sequencer: Box::new(new_random_sequencer()),
-                ssrc: context.ssrc(),
+                last_update: Instant::now(),
+                mtu: RTP_OUTBOUND_MTU,
                 data_rate: DataRate::default(),
             };
             Box::new(encoder)
@@ -65,30 +65,76 @@ impl EncoderBuilder for MockEncoderBuilder {
     }
 }
 
-const FRAME_INTERVAL_60_FPS: Duration = Duration::from_micros(16_667);
-
 pub struct MockEncoder {
-    mtu: usize,
+    payload_type: u8,
+    ssrc: u32,
+    sequencer: Box<dyn Sequencer + Send + Sync>,
     start: (Instant, u32),
     clock_rate: u64,
-    time: Instant,
-    payload_type: u8,
-    sequencer: Box<dyn Sequencer + Send + Sync>,
-    ssrc: u32,
+    last_update: Instant,
+    mtu: usize,
     data_rate: DataRate,
 }
 
-fn dummy_payloads(mtu: usize, data_rate: DataRate) -> Vec<Bytes> {
-    let frame_interval = FRAME_INTERVAL_60_FPS.as_micros() as f64;
-    let bytes_per_micros = data_rate.bytes_per_sec_f64() * 1e6;
-    let bytes_per_interval = (bytes_per_micros / frame_interval) as u64;
+impl Encoder for MockEncoder {
+    fn packets(&mut self) -> Box<[Packet]> {
+        const FRAME_INTERVAL_60_FPS: Duration = Duration::from_micros(16_667);
 
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_update);
+        if elapsed < FRAME_INTERVAL_60_FPS {
+            return Box::new([]);
+        }
+
+        self.last_update = now;
+
+        let payload_total_bytes = self.data_rate.bytes_per_sec_f64() * elapsed.as_secs_f64();
+        let payloads = dummy_payloads(self.mtu - 12, payload_total_bytes.floor() as u64);
+
+        let duration = self.last_update.duration_since(self.start.0).as_millis() as u64;
+        let ticks = duration.wrapping_mul(self.clock_rate).wrapping_div(1000);
+        let timestamp = self.start.1.wrapping_add(ticks as u32);
+
+        let mut packets = Vec::with_capacity(payloads.len());
+
+        for payload in payloads {
+            let header = Header {
+                version: 2,
+                padding: false,
+                extension: false,
+                marker: false,
+                payload_type: self.payload_type,
+                sequence_number: self.sequencer.next_sequence_number(),
+                timestamp,
+                ssrc: self.ssrc,
+                ..Default::default()
+            };
+            let packet = Packet { header, payload };
+            packets.push(packet);
+        }
+
+        let mut last_packet = packets.last_mut().unwrap();
+        last_packet.header.marker = true;
+
+        packets.into_boxed_slice()
+    }
+
+    fn set_mtu(&mut self, mtu: usize) {
+        self.mtu = mtu;
+    }
+
+    fn set_data_rate(&mut self, data_rate: DataRate) {
+        self.data_rate = data_rate;
+    }
+}
+
+fn dummy_payloads(mtu: usize, payload_total_bytes: u64) -> Vec<Bytes> {
     let data = vec![42u8; mtu];
     let mut payloads = Vec::new();
-    let mut remaining_bytes = bytes_per_interval;
+    let mut remaining_bytes = payload_total_bytes;
     loop {
-        payloads.push(Bytes::copy_from_slice(&data));
         if let Some(r) = remaining_bytes.checked_sub(mtu as u64) {
+            payloads.push(Bytes::copy_from_slice(&data));
             remaining_bytes = r;
         } else {
             break;
@@ -100,66 +146,4 @@ fn dummy_payloads(mtu: usize, data_rate: DataRate) -> Vec<Bytes> {
     }
 
     payloads
-}
-
-impl Encoder for MockEncoder {
-    fn packets(&mut self) -> Box<[Packet]> {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.time);
-        if elapsed >= FRAME_INTERVAL_60_FPS {
-            self.time = now;
-            let duration = self.time.duration_since(self.start.0).as_millis() as u64;
-            let ticks = duration.wrapping_mul(self.clock_rate).wrapping_div(1000);
-            let timestamp = self.start.1.wrapping_add(ticks as u32);
-
-            let mut payloads = dummy_payloads(self.mtu - 12, self.data_rate);
-            let payloads_len = payloads.len();
-            let mut packets = Vec::with_capacity(payloads_len);
-
-            for payload in payloads.drain(..(payloads_len - 1)) {
-                let header = Header {
-                    version: 2,
-                    padding: false,
-                    extension: false,
-                    marker: false,
-                    payload_type: self.payload_type,
-                    sequence_number: self.sequencer.next_sequence_number(),
-                    timestamp,
-                    ssrc: self.ssrc,
-                    ..Default::default()
-                };
-                let packet = Packet { header, payload };
-                packets.push(packet);
-            }
-
-            {
-                let payload = payloads.pop().unwrap();
-                let header = Header {
-                    version: 2,
-                    padding: false,
-                    extension: false,
-                    marker: true,
-                    payload_type: self.payload_type,
-                    sequence_number: self.sequencer.next_sequence_number(),
-                    timestamp,
-                    ssrc: self.ssrc,
-                    ..Default::default()
-                };
-                let packet = Packet { header, payload };
-                packets.push(packet);
-            }
-
-            packets.into_boxed_slice()
-        } else {
-            Box::new([])
-        }
-    }
-
-    fn set_mtu(&mut self, mtu: usize) {
-        self.mtu = mtu;
-    }
-
-    fn set_data_rate(&mut self, data_rate: DataRate) {
-        self.data_rate = data_rate;
-    }
 }
