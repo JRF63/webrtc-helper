@@ -2,6 +2,7 @@ use webrtc::{rtp_transceiver::rtp_receiver::RTCRtpReceiver, track::track_remote:
 
 use crate::{codecs::Codec, decoder::DecoderBuilder};
 use std::{
+    collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -30,42 +31,63 @@ impl DecoderBuilder for MockDecoderBuilder {
                 .build()
                 .unwrap()
                 .block_on(async move {
-                    let start = Instant::now();
-                    let mut data = Vec::new();
+                    const WINDOW_LEN: usize = 2000;
+                    let mut data = VecDeque::new();
 
+                    let start = Instant::now();
+
+                    let mut i = 0;
+                    let mut total_bytes = 0;
                     let mut buffer = vec![0; 1500];
 
-                    // let sleep = tokio::time::sleep(Duration::from_secs(5));
-                    // tokio::pin!(sleep);
                     loop {
                         tokio::select! {
-                            read_result = track.read(&mut buffer) => {
-                                if let Ok((bytes, _)) = read_result {
-                                    let duration = Instant::now().duration_since(start);
-                                    let timestamp = duration.as_millis();
-                                    data.push((bytes, timestamp as u64));
-                                } else {
+                                read_result = track.read(&mut buffer) => {
+                                    if let Ok((bytes, _)) = read_result {
+                                        total_bytes += bytes;
+                                        i += 1;
+
+                                        let duration = Instant::now().duration_since(start);
+                                        let timestamp = duration.as_millis();
+
+                                        data.push_back((bytes, timestamp as u64));
+
+                                        if data.len() > WINDOW_LEN {
+                                            let (bytes, _) = data.pop_front().unwrap();
+                                            total_bytes -= bytes;
+                                        }
+
+                                        if i % WINDOW_LEN == 0 {
+                                            let (_, start) = data.front().unwrap();
+                                            let (_, end) = data.back().unwrap();
+
+                                            // in seconds
+                                            let elapsed = (end - start) as f64 / 1e3;
+                                            let average_bitrate = total_bytes as f64 / elapsed;
+                                            println!(">: {average_bitrate:.4}");
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                _ = tokio::time::sleep(Duration::from_secs(1)) => {
                                     break;
                                 }
                             }
-                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                                break;
-                            }
-                        }
                     }
 
-                    let (_, start) = data.first().unwrap();
-                    let (_, end) = data.last().unwrap();
+                    // let (_, start) = data.first().unwrap();
+                    // let (_, end) = data.last().unwrap();
 
-                    let mut total_bytes = 0;
-                    for (bytes, _) in &data {
-                        total_bytes += bytes;
-                    }
+                    // let mut total_bytes = 0;
+                    // for (bytes, _) in &data {
+                    //     total_bytes += bytes;
+                    // }
 
-                    let elapsed = (end - start) as f64 / 1e3;
-                    // bytes per sec
-                    let average_bitrate = total_bytes as f64 / elapsed;
-                    println!("Bitrate: {average_bitrate} Bps, Elapsed: {elapsed}");
+                    // let elapsed = (end - start) as f64 / 1e3;
+                    // // bytes per sec
+                    // let average_bitrate = total_bytes as f64 / elapsed;
+                    // println!("Bitrate: {average_bitrate} Bps, Elapsed: {elapsed}");
                 })
         });
     }

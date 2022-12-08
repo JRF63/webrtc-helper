@@ -15,7 +15,7 @@ async fn mock_test() {
         let mut encoder_builder = WebRtcBuilder::new(encoder_signaler, Role::Offerer);
         encoder_builder.with_encoder(Box::new(MockEncoderBuilder::new()));
         let encoder = encoder_builder.build().await.unwrap();
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
         encoder.close().await;
     });
 

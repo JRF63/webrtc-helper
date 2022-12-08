@@ -54,7 +54,7 @@ pub struct TwccBandwidthEstimate(Arc<AtomicU64>);
 impl TwccBandwidthEstimate {
     pub fn new() -> TwccBandwidthEstimate {
         // 1 Mbps
-        const INITIAL_BANDWIDTH: u64 = 20_000_000;
+        const INITIAL_BANDWIDTH: u64 = 50_000_000;
 
         TwccBandwidthEstimate(Arc::new(AtomicU64::new(
             DataRate::from_bits_per_sec(INITIAL_BANDWIDTH).as_blob(),

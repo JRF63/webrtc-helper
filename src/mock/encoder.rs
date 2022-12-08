@@ -4,7 +4,7 @@ use crate::{
     util::data_rate::DataRate,
 };
 use bytes::Bytes;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 use webrtc::{
     rtp::{
         header::Header,
@@ -57,6 +57,7 @@ impl EncoderBuilder for MockEncoderBuilder {
                 last_update: Instant::now(),
                 mtu: RTP_OUTBOUND_MTU,
                 data_rate: DataRate::default(),
+                rate_change_counter: 0,
             };
             Box::new(encoder)
         } else {
@@ -74,6 +75,7 @@ pub struct MockEncoder {
     last_update: Instant,
     mtu: usize,
     data_rate: DataRate,
+    rate_change_counter: u64,
 }
 
 impl Encoder for MockEncoder {
@@ -124,7 +126,12 @@ impl Encoder for MockEncoder {
     }
 
     fn set_data_rate(&mut self, data_rate: DataRate) {
+        self.rate_change_counter += 1;
         self.data_rate = data_rate;
+        if self.rate_change_counter % 20 == 0 {
+            let bitrate = self.data_rate.bytes_per_sec_f64();
+            println!("<: {bitrate:.3}");
+        }
     }
 }
 
