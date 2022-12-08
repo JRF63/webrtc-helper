@@ -15,8 +15,13 @@ impl ArrivalTimeFilter {
         }
     }
 
-    /// Updates the Kalman filter, returning the previous intergroup delay variation estimate.
-    fn update(&mut self, intergroup_delay: i64, min_send_interval: i64) -> f64 {
+    /// Returns the previous intergroup delay variation estimate.
+    fn m_hat(&self) -> f64 {
+        self.m_hat
+    }
+
+    /// Updates the Kalman filter.
+    fn update(&mut self, intergroup_delay: i64, min_send_interval: i64) {
         // This is different than in the Google CC alg. draft since the interval used here is in
         // microseconds
         let alpha = (1.0 - CHI).powf(30.0 * (min_send_interval as f64) / 1e6);
@@ -31,9 +36,7 @@ impl ArrivalTimeFilter {
         let k = (self.e + q) / (self.var_v_hat + (self.e + q));
         self.e = (1.0 - k) * (self.e + q);
 
-        let prev = self.m_hat;
         self.m_hat = self.m_hat + z * k;
-        prev
     }
 }
 
@@ -46,6 +49,10 @@ impl DelayThreshold {
         DelayThreshold {
             threshold: INITIAL_DELAY_THRESHOLD_US,
         }
+    }
+
+    fn threshold(&self) -> f64 {
+        self.threshold
     }
 
     fn update(&mut self, interarrival_time: i64, intergroup_delay_estimate: f64) {
@@ -89,11 +96,13 @@ impl DelayDetector {
         interarrival_time: i64,
         arrival_time: TwccTime,
     ) -> NetworkCondition {
-        let prev_m = self.filter.update(intergroup_delay, min_send_interval);
+        let prev_m = self.filter.m_hat();
+        self.filter.update(intergroup_delay, min_send_interval);
         let m = self.filter.m_hat;
 
         self.delay_threshold.update(interarrival_time, m);
-        let del_var_th = self.delay_threshold.threshold;
+        let del_var_th = self.delay_threshold.threshold();
+        // println!("{m:.2} {del_var_th:.2}");
 
         if m > del_var_th {
             if m < prev_m {

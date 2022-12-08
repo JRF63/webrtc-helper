@@ -7,7 +7,7 @@ const REFERENCE_TIME_WRAPAROUND: i64 = (1 << 24) * 64000;
 const PROBABLE_WRAPAROUND_THRESHOLD: i64 = REFERENCE_TIME_WRAPAROUND / 2;
 
 // Timestamp is always in the half-open domain [0, 1073741824000).
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[repr(transparent)]
 pub struct TwccTime(i64);
 

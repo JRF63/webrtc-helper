@@ -90,6 +90,7 @@ pub trait Encoder: Send {
                                 }
 
                                 for packet in self.packets().iter() {
+                                    // TODO: Random errors here
                                     if let Err(_err) = rtp_track.write_rtp(packet).await {
                                         // TODO: log error
                                     }

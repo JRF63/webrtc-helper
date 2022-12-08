@@ -42,38 +42,38 @@ impl DecoderBuilder for MockDecoderBuilder {
 
                     loop {
                         tokio::select! {
-                                read_result = track.read(&mut buffer) => {
-                                    if let Ok((bytes, _)) = read_result {
-                                        total_bytes += bytes;
-                                        i += 1;
+                            read_result = track.read(&mut buffer) => {
+                                if let Ok((bytes, _)) = read_result {
+                                    total_bytes += bytes;
+                                    i += 1;
 
-                                        let duration = Instant::now().duration_since(start);
-                                        let timestamp = duration.as_millis();
+                                    let duration = Instant::now().duration_since(start);
+                                    let timestamp = duration.as_millis();
 
-                                        data.push_back((bytes, timestamp as u64));
+                                    data.push_back((bytes, timestamp as u64));
 
-                                        if data.len() > WINDOW_LEN {
-                                            let (bytes, _) = data.pop_front().unwrap();
-                                            total_bytes -= bytes;
-                                        }
-
-                                        if i % WINDOW_LEN == 0 {
-                                            let (_, start) = data.front().unwrap();
-                                            let (_, end) = data.back().unwrap();
-
-                                            // in seconds
-                                            let elapsed = (end - start) as f64 / 1e3;
-                                            let average_bitrate = total_bytes as f64 / elapsed;
-                                            println!(">: {average_bitrate:.4}");
-                                        }
-                                    } else {
-                                        break;
+                                    if data.len() > WINDOW_LEN {
+                                        let (bytes, _) = data.pop_front().unwrap();
+                                        total_bytes -= bytes;
                                     }
-                                }
-                                _ = tokio::time::sleep(Duration::from_secs(1)) => {
+
+                                    if i % WINDOW_LEN == 0 {
+                                        let (_, start) = data.front().unwrap();
+                                        let (_, end) = data.back().unwrap();
+
+                                        // in seconds
+                                        let elapsed = (end - start) as f64 / 1e3;
+                                        let average_bitrate = total_bytes as f64 / elapsed;
+                                        println!(">: {average_bitrate:.4}");
+                                    }
+                                } else {
                                     break;
                                 }
                             }
+                            _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                                break;
+                            }
+                        }
                     }
                 })
         });

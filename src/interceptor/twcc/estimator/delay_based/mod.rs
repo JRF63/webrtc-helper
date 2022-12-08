@@ -98,7 +98,7 @@ impl DelayBasedBandwidthEstimator {
             delay_detector: None,
             last_update: None,
             network_condition: NetworkCondition::Normal,
-            rtt_ms: 0.0, // TODO
+            rtt_ms: 0.0,
         }
     }
 
@@ -160,6 +160,9 @@ impl DelayBasedBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, current_bandwidth: f64, now: Instant) -> f64 {
+        // Underuse - retain current bandwidth
+        // Normal - increase bandwidth
+        // Overuse - decrease bandwidth
         let mut bandwidth_estimate = match self.network_condition {
             NetworkCondition::Underuse => current_bandwidth,
             NetworkCondition::Normal => {
@@ -177,14 +180,20 @@ impl DelayBasedBandwidthEstimator {
                 }
             }
             NetworkCondition::Overuse => {
-                if let Some(bytes_per_sec) = self.history.received_bandwidth_bytes_per_sec() {
-                    self.incoming_bitrate_estimate.update(bytes_per_sec)
+                if let Some(received_bandwidth) = self.history.received_bandwidth_bytes_per_sec() {
+                    self.incoming_bitrate_estimate.update(received_bandwidth);
+                    bandwidth_decrease(received_bandwidth)
+                } else {
+                    // We don't have an estimate of the received bandwidth but we still want to
+                    // decrease the sending bandwidth. Use the current sending bandwidth as a proxy
+                    // assuming it's near the received bandwidth.
+                    bandwidth_decrease(current_bandwidth)
                 }
-                bandwidth_decrease(current_bandwidth)
             }
         };
         self.last_update = Some(now);
 
+        // Cap the bandwidth to a multiple of the apparent bandwidth on the receiver size
         if let Some(received_bandwidth) = self.history.received_bandwidth_bytes_per_sec() {
             let bandwidth_threshold = 1.5 * received_bandwidth;
             if bandwidth_estimate >= bandwidth_threshold {
@@ -225,6 +234,6 @@ fn bandwidth_multiplicative_increase(
     current_bandwidth * eta
 }
 
-fn bandwidth_decrease(current_bandwidth: f64) -> f64 {
-    current_bandwidth * DECREASE_RATE_FACTOR
+fn bandwidth_decrease(received_bandwidth: f64) -> f64 {
+    received_bandwidth * DECREASE_RATE_FACTOR
 }

@@ -3,6 +3,7 @@ use super::*;
 pub struct PacketGroup {
     pub earliest_departure_time_us: TwccTime,
     pub departure_time_us: TwccTime,
+    pub earliest_arrival_time_us: TwccTime,
     pub arrival_time_us: TwccTime,
     pub size_bytes: u64,
     pub num_packets: u64,
@@ -17,6 +18,7 @@ impl PacketGroup {
         PacketGroup {
             earliest_departure_time_us: departure_time_us,
             departure_time_us,
+            earliest_arrival_time_us: arrival_time_us,
             arrival_time_us,
             size_bytes: packet_size,
             num_packets: 1,
@@ -24,16 +26,16 @@ impl PacketGroup {
     }
 
     pub fn belongs_to_group(&self, departure_time_us: TwccTime, arrival_time_us: TwccTime) -> bool {
-        if departure_time_us.sub_assuming_small_delta(self.earliest_departure_time_us)
-            > BURST_TIME_US
-        {
+        let interdeparture_time =
+            departure_time_us.sub_assuming_small_delta(self.earliest_departure_time_us);
+        if interdeparture_time < BURST_TIME_US {
             return true;
         }
 
-        let interarrival_time = arrival_time_us.sub_assuming_small_delta(self.arrival_time_us);
-        let interdeparture_time =
-            departure_time_us.sub_assuming_small_delta(self.departure_time_us);
+        let interarrival_time =
+            arrival_time_us.sub_assuming_small_delta(self.earliest_arrival_time_us);
         let intergroup_delay = interarrival_time - interdeparture_time;
+        // println!("{interarrival_time} {interdeparture_time} {intergroup_delay}");
         if interarrival_time < BURST_TIME_US && intergroup_delay < 0 {
             return true;
         }
