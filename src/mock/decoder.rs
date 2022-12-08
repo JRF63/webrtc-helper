@@ -75,19 +75,6 @@ impl DecoderBuilder for MockDecoderBuilder {
                                 }
                             }
                     }
-
-                    // let (_, start) = data.first().unwrap();
-                    // let (_, end) = data.last().unwrap();
-
-                    // let mut total_bytes = 0;
-                    // for (bytes, _) in &data {
-                    //     total_bytes += bytes;
-                    // }
-
-                    // let elapsed = (end - start) as f64 / 1e3;
-                    // // bytes per sec
-                    // let average_bitrate = total_bytes as f64 / elapsed;
-                    // println!("Bitrate: {average_bitrate} Bps, Elapsed: {elapsed}");
                 })
         });
     }

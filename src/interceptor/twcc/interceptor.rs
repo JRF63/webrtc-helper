@@ -60,16 +60,7 @@ impl RTCPReader for TwccStream {
                     bandwidth_estimator.process_feedback(tcc, &self.map);
                 }
             } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
-                let now = (unix2ntp(SystemTime::now()) >> 16) as u32;
-
-                // Get the last RTT
-                let rtt_ms = rr
-                    .reports
-                    .iter()
-                    .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
-                    .reduce(|_, item| item);
-
-                if let Some(rtt_ms) = rtt_ms {
+                if let Some(rtt_ms) = rtt_from_receiver_report(rr) {
                     if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
                         bandwidth_estimator.update_rtt(rtt_ms);
                     }
@@ -83,6 +74,28 @@ impl RTCPReader for TwccStream {
 
         Ok((n, attr))
     }
+}
+
+fn rtt_from_receiver_report(rr: &ReceiverReport) -> Option<f64> {
+    let now = (unix2ntp(SystemTime::now()) >> 16) as u32;
+
+    // Get the latest RTT
+    rr.reports
+        .last()
+        .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
+
+    // rr.reports
+    //     .iter()
+    //     .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
+    //     .reduce(|_, item| item)
+}
+
+// Copied from interceptor::stats::StatsInterceptor
+fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
+    let rtt = now - delay - last_sender_report;
+    let rtt_seconds = rtt >> 16;
+    let rtt_fraction = (rtt & (u16::MAX as u32)) as f64 / (u16::MAX as u32) as f64;
+    rtt_seconds as f64 * 1000.0 + (rtt_fraction as f64) * 1000.0
 }
 
 pub struct TwccInterceptor {
@@ -180,12 +193,4 @@ impl InterceptorBuilder for TwccInterceptorBuilder {
             start_time: Instant::now(),
         }))
     }
-}
-
-// TODO: This was copied from interceptor::stats::StatsInterceptor
-fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
-    let rtt = now - delay - last_sender_report;
-    let rtt_seconds = rtt >> 16;
-    let rtt_fraction = (rtt & (u16::MAX as u32)) as f64 / (u16::MAX as u32) as f64;
-    rtt_seconds as f64 * 1000.0 + (rtt_fraction as f64) * 1000.0
 }

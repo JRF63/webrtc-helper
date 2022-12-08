@@ -186,8 +186,9 @@ impl DelayBasedBandwidthEstimator {
         self.last_update = Some(now);
 
         if let Some(received_bandwidth) = self.history.received_bandwidth_bytes_per_sec() {
-            if bandwidth_estimate >= 1.5 * received_bandwidth {
-                bandwidth_estimate = received_bandwidth;
+            let bandwidth_threshold = 1.5 * received_bandwidth;
+            if bandwidth_estimate >= bandwidth_threshold {
+                bandwidth_estimate = bandwidth_threshold;
             }
         }
 
