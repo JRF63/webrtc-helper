@@ -35,7 +35,6 @@ impl PacketGroup {
         let interarrival_time =
             arrival_time_us.sub_assuming_small_delta(self.earliest_arrival_time_us);
         let intergroup_delay = interarrival_time - interdeparture_time;
-        // println!("{interarrival_time} {interdeparture_time} {intergroup_delay}");
         if interarrival_time < BURST_TIME_US && intergroup_delay < 0 {
             return true;
         }

@@ -48,7 +48,7 @@ pub trait EncoderBuilder: Send {
 
 pub trait Encoder: Send {
     // TODO: async or return a Stream
-    fn packets(&mut self) -> Box<[Packet]>;
+    fn packets(&mut self) -> &[Packet];
 
     // TODO: Unused. Probably "pull" MTU instead like with the bandwidth-estimate.
     fn set_mtu(&mut self, mtu: usize);
