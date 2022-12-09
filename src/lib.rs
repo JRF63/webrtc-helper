@@ -1,7 +1,6 @@
 pub mod codecs;
 pub mod decoder;
 pub mod encoder;
-mod error;
 mod interceptor;
 mod peer;
 mod signaling;
