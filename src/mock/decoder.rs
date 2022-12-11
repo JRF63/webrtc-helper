@@ -2,7 +2,6 @@ use webrtc::{rtp_transceiver::rtp_receiver::RTCRtpReceiver, track::track_remote:
 
 use crate::{codecs::Codec, decoder::DecoderBuilder};
 use std::{
-    collections::VecDeque,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -31,44 +30,39 @@ impl DecoderBuilder for MockDecoderBuilder {
                 .build()
                 .unwrap()
                 .block_on(async move {
-                    const WINDOW_LEN: usize = 2000;
-                    let mut data = VecDeque::new();
+                    let mut data = Vec::new();
 
                     let start = Instant::now();
 
-                    let mut i = 0;
-                    let mut total_bytes = 0;
+                    let mut packet_bytes_accum = 0;
                     let mut buffer = vec![0; 1500];
+
+                    let mut interval = tokio::time::interval(Duration::from_secs(3));
+                    interval.tick().await;
 
                     loop {
                         tokio::select! {
                             read_result = track.read(&mut buffer) => {
-                                if let Ok((bytes, _)) = read_result {
-                                    total_bytes += bytes;
-                                    i += 1;
+                                if let Ok((packet_bytes, _)) = read_result {
+                                    packet_bytes_accum += packet_bytes;
 
                                     let duration = Instant::now().duration_since(start);
                                     let timestamp = duration.as_millis();
 
-                                    data.push_back((bytes, timestamp as u64));
-
-                                    if data.len() > WINDOW_LEN {
-                                        let (bytes, _) = data.pop_front().unwrap();
-                                        total_bytes -= bytes;
-                                    }
-
-                                    if i % WINDOW_LEN == 0 {
-                                        let (_, start) = data.front().unwrap();
-                                        let (_, end) = data.back().unwrap();
-
-                                        // in seconds
-                                        let elapsed = (end - start) as f64 / 1e3;
-                                        let average_bitrate = total_bytes as f64 / elapsed;
-                                        println!("   >: {average_bitrate:.4}");
-                                    }
+                                    data.push((packet_bytes, timestamp as u64));
                                 } else {
                                     break;
                                 }
+                            }
+                            _ = interval.tick() => {
+                                if let (Some((_, start)), Some((_, end))) = (data.first(), data.last()) {
+                                    let elapsed = (end - start) as f64 / 1e3; // in seconds
+                                    let average_bitrate = packet_bytes_accum as f64 / elapsed;
+                                    println!("   >: {average_bitrate:.4}");
+                                    packet_bytes_accum = 0;
+                                    data.clear();
+                                }
+                                
                             }
                             _ = tokio::time::sleep(Duration::from_secs(1)) => {
                                 break;
