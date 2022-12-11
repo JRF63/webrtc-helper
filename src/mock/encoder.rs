@@ -113,6 +113,12 @@ impl Encoder for MockEncoder {
             return &[];
         }
 
+        if self.rate_change_counter % 180 == 0 {
+            let send_bitrate = self.data_rate.bytes_per_sec_f64();
+            println!("<: {send_bitrate:.3}");
+        }
+        self.rate_change_counter = self.rate_change_counter.wrapping_add(1);
+
         self.last_update = now;
 
         let payload_total_bytes = self.data_rate.bytes_per_sec_f64() * elapsed.as_secs_f64();
@@ -141,10 +147,5 @@ impl Encoder for MockEncoder {
 
     fn set_data_rate(&mut self, data_rate: DataRate) {
         self.data_rate = data_rate;
-        if self.rate_change_counter % 20 == 0 {
-            let bitrate = self.data_rate.bytes_per_sec_f64();
-            println!("<: {bitrate:.3}");
-        }
-        self.rate_change_counter += 1;
     }
 }
