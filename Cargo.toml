@@ -7,7 +7,7 @@ edition = "2021"
 async-trait = "0.1.57"
 base64 = "0.13.0"
 tokio = { version = "1.21.1", features = ["full"] }
-webrtc = "0.5.1"
+webrtc = "0.6"
 bytes = "1.2.1"
 
 [profile.test]

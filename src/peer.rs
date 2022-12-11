@@ -139,8 +139,7 @@ where
                                 peer.start_negotiation().await;
                             }
                         })
-                    }))
-                    .await;
+                    }));
             }
             Role::Answerer => (),
         }
@@ -154,8 +153,7 @@ where
                         let _ = peer.signaler.send(Message::IceCandidate(candidate)).await;
                     }
                 })
-            }))
-            .await;
+            }));
 
         let peer_clone = peer.clone();
         tokio::spawn(async move {
@@ -177,7 +175,7 @@ where
                         }
                         Message::IceCandidate(candidate) => {
                             peer.peer_connection
-                                .add_ice_candidate(candidate.to_json().await?)
+                                .add_ice_candidate(candidate.to_json()?)
                                 .await?;
                         }
                         Message::Bye => {
@@ -215,8 +213,7 @@ where
                         }
                     })
                 },
-            ))
-            .await;
+            ));
 
         for encoder_builder in self.encoders {
             if let Some(track) = EncoderTrackLocal::new(encoder_builder, bandwidth_estimate.clone())

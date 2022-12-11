@@ -64,7 +64,7 @@ impl DecoderBuilder for MockDecoderBuilder {
                                         // in seconds
                                         let elapsed = (end - start) as f64 / 1e3;
                                         let average_bitrate = total_bytes as f64 / elapsed;
-                                        println!(">: {average_bitrate:.4}");
+                                        println!("   >: {average_bitrate:.4}");
                                     }
                                 } else {
                                     break;
