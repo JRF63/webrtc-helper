@@ -47,12 +47,13 @@ pub trait EncoderBuilder: Send {
 }
 
 pub trait Encoder: Send {
-    // TODO: async or return a Stream
+    /// Return the `Packets` for the current frame. This function is allowed to block.
     fn packets(&mut self) -> &[Packet];
 
     // TODO: Unused. Probably "pull" MTU instead like with the bandwidth-estimate.
     fn set_mtu(&mut self, mtu: usize);
 
+    /// Sets the bandwidth of the encoder.
     fn set_data_rate(&mut self, data_rate: DataRate);
 
     fn start(
@@ -64,6 +65,7 @@ pub trait Encoder: Send {
         // TODO: Why 'static??
         Self: 'static,
     {
+        // Spawn a dedicated thread for the encoder since its calls may block.
         std::thread::spawn(move || {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -82,7 +84,11 @@ pub trait Encoder: Send {
                                 }
                             }
                             Err(TryRecvError::Empty) => {
-                                // Encode
+                                // `Encoder::start` is called inside `EncoderTrackLocal::bind` with
+                                // `Bind` already passed as the first event. This means that
+                                // `rtp_track` will be `bind`ed beforehand in the first branch of
+                                // this map and its `write_rtp` method should succeed.
+                                
                                 let new_data_rate = bandwidth_estimate.get_estimate();
                                 if new_data_rate != data_rate {
                                     data_rate = new_data_rate;
