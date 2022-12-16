@@ -160,12 +160,11 @@ impl DelayBasedBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, current_bandwidth: f64, now: Instant) -> f64 {
-        // Underuse - retain current bandwidth
+        // Underuse - retain current bandwidth (bugged?)
         // Normal - increase bandwidth
         // Overuse - decrease bandwidth
         let mut bandwidth_estimate = match self.network_condition {
-            NetworkCondition::Underuse => current_bandwidth,
-            NetworkCondition::Normal => {
+            NetworkCondition::Underuse | NetworkCondition::Normal => {
                 let time_since_last_update_ms = self.time_since_last_update(now);
 
                 if self.incoming_bitrate_estimate.has_converged() {

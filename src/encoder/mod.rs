@@ -48,13 +48,7 @@ pub trait EncoderBuilder: Send {
 
 pub trait Encoder: Send {
     /// Return the `Packets` for the current frame. This function is allowed to block.
-    fn packets(&mut self) -> &[Packet];
-
-    // TODO: Unused. Probably "pull" MTU instead like with the bandwidth-estimate.
-    fn set_mtu(&mut self, mtu: usize);
-
-    /// Sets the bandwidth of the encoder.
-    fn set_data_rate(&mut self, data_rate: DataRate);
+    fn packets(&mut self, mtu: usize, data_rate: DataRate) -> &[Packet];
 
     fn start(
         mut self: Box<Self>,
@@ -72,8 +66,6 @@ pub trait Encoder: Send {
                 .build()
                 .unwrap()
                 .block_on(async move {
-                    let mut data_rate = DataRate::default();
-
                     // TODO: Check if the calls to `packets` and `set_data_rate` passes through a v-table.
                     loop {
                         match receiver.try_recv() {
@@ -88,14 +80,11 @@ pub trait Encoder: Send {
                                 // `Bind` already passed as the first event. This means that
                                 // `rtp_track` will be `bind`ed beforehand in the first branch of
                                 // this map and its `write_rtp` method should succeed.
-                                
-                                let new_data_rate = bandwidth_estimate.get_estimate();
-                                if new_data_rate != data_rate {
-                                    data_rate = new_data_rate;
-                                    self.set_data_rate(data_rate);
-                                }
 
-                                for packet in self.packets().iter() {
+                                // TODO: Proper MTU estimation
+                                const MTU: usize = 1200;
+                                
+                                for packet in self.packets(MTU, bandwidth_estimate.get_estimate()).iter() {
                                     // TODO: Random errors here
                                     if let Err(_err) = rtp_track.write_rtp(packet).await {
                                         // TODO: log error

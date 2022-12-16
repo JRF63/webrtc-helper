@@ -46,15 +46,11 @@ impl EncoderBuilder for MockEncoderBuilder {
         context: &TrackLocalContext,
     ) -> Box<dyn Encoder> {
         if self.is_codec_supported(codec_params) {
-            const RTP_OUTBOUND_MTU: usize = 1200;
-
             let encoder = MockEncoder {
                 sequencer: Box::new(new_random_sequencer()),
                 start: (Instant::now(), 0),
                 clock_rate: 90000,
                 last_update: Instant::now(),
-                mtu: RTP_OUTBOUND_MTU,
-                data_rate: DataRate::default(),
                 rate_change_counter: 0,
                 packets: dummy_packets(codec_params.payload_type, context.ssrc())
             };
@@ -97,14 +93,12 @@ pub struct MockEncoder {
     start: (Instant, u32),
     clock_rate: u64,
     last_update: Instant,
-    mtu: usize,
-    data_rate: DataRate,
     rate_change_counter: u64,
     packets: Vec<Packet>,
 }
 
 impl Encoder for MockEncoder {
-    fn packets(&mut self) -> &[Packet] {
+    fn packets(&mut self, mtu: usize, data_rate: DataRate) -> &[Packet] {
         const FRAME_INTERVAL_60_FPS: Duration = Duration::from_micros(16_667);
 
         let now = Instant::now();
@@ -114,15 +108,15 @@ impl Encoder for MockEncoder {
         }
 
         if self.rate_change_counter % 180 == 0 {
-            let send_bitrate = self.data_rate.bytes_per_sec_f64();
+            let send_bitrate = data_rate.bytes_per_sec_f64();
             println!("<: {send_bitrate:.3}");
         }
         self.rate_change_counter = self.rate_change_counter.wrapping_add(1);
 
         self.last_update = now;
 
-        let payload_total_bytes = self.data_rate.bytes_per_sec_f64() * elapsed.as_secs_f64();
-        let num_packets = (payload_total_bytes as usize) / (1200 - 12);
+        let payload_total_bytes = data_rate.bytes_per_sec_f64() * elapsed.as_secs_f64();
+        let num_packets = (payload_total_bytes as usize) / (mtu - 12);
         if num_packets == 0 {
             return &[];
         }
@@ -137,15 +131,6 @@ impl Encoder for MockEncoder {
         }
 
         self.packets[num_packets - 1].header.marker = true;
-        // println!("{} {payload_total_bytes} {num_packets}", self.data_rate.bytes_per_sec_f64());
         &self.packets[..num_packets]
-    }
-
-    fn set_mtu(&mut self, mtu: usize) {
-        self.mtu = mtu;
-    }
-
-    fn set_data_rate(&mut self, data_rate: DataRate) {
-        self.data_rate = data_rate;
     }
 }
