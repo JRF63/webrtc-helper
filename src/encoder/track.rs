@@ -1,7 +1,7 @@
 use super::{EncoderBuilder, TrackLocalEvent};
 use crate::interceptor::twcc::TwccBandwidthEstimate;
 use async_trait::async_trait;
-use std::{any::Any, ops::DerefMut};
+use std::any::Any;
 use tokio::sync::{
     mpsc::{channel, Sender},
     Mutex,
@@ -35,7 +35,7 @@ impl TrackLocal for EncoderTrackLocal {
     async fn bind(&self, t: &TrackLocalContext) -> Result<RTCRtpCodecParameters> {
         let mut data = self.data.lock().await;
 
-        match data.deref_mut() {
+        match &mut *data {
             TrackLocalData::Builder(builder) => {
                 for codec in t.codec_parameters() {
                     if builder.is_codec_supported(codec) {
@@ -55,7 +55,7 @@ impl TrackLocal for EncoderTrackLocal {
 
                         let mut sender = TrackLocalData::Sender((codec.clone(), tx));
 
-                        std::mem::swap(data.deref_mut(), &mut sender);
+                        std::mem::swap(&mut *data, &mut sender);
 
                         if let TrackLocalData::Builder(builder) = sender {
                             let encoder = builder.build(codec, t);
@@ -78,7 +78,7 @@ impl TrackLocal for EncoderTrackLocal {
 
     async fn unbind(&self, t: &TrackLocalContext) -> Result<()> {
         let mut data = self.data.lock().await;
-        if let TrackLocalData::Sender((_, sender)) = data.deref_mut() {
+        if let TrackLocalData::Sender((_, sender)) = &mut *data {
             if sender
                 .send(TrackLocalEvent::Unbind(t.clone()))
                 .await
