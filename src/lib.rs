@@ -3,7 +3,7 @@ pub mod decoder;
 pub mod encoder;
 mod interceptor;
 mod peer;
-mod signaling;
+pub mod signaling;
 pub mod util;
 
 #[cfg(test)]
