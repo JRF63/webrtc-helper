@@ -6,6 +6,7 @@ use webrtc::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum Message {
     Sdp(RTCSessionDescription),
     IceCandidate(RTCIceCandidate),
