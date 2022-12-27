@@ -107,7 +107,7 @@ impl Codec {
         let mut sdp_fmtp_line = format!(
             "level-asymmetry-allowed=1;\
             packetization-mode=1;\
-            profile-level-id={profile_idc:x}{profile_iop:x}{level_idc:x}"
+            profile-level-id={profile_idc:02x}{profile_iop:02x}{level_idc:02x}"
         );
         if let Some((sps, pps)) = sps_and_pps {
             let sps_base64 = base64::encode(sps);
