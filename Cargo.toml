@@ -11,5 +11,8 @@ serde = "1.0.151"
 tokio = { version = "1.21.1", features = ["full"] }
 webrtc = "0.6"
 
+[dev-dependencies]
+serde_json = "1.0.91"
+
 [profile.test]
 opt-level = 3
