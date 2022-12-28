@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use webrtc::{
-    ice_transport::ice_candidate::RTCIceCandidate,
+    ice_transport::ice_candidate::RTCIceCandidateInit,
     peer_connection::sdp::session_description::RTCSessionDescription,
 };
 
@@ -9,7 +9,7 @@ use webrtc::{
 #[serde(tag = "type", content = "data")]
 pub enum Message {
     Sdp(RTCSessionDescription),
-    IceCandidate(RTCIceCandidate),
+    IceCandidate(RTCIceCandidateInit),
     Bye,
 }
 
@@ -27,7 +27,7 @@ mod tests {
     fn json_serde() {
         let messages = [
             Message::Sdp(RTCSessionDescription::default()),
-            Message::IceCandidate(RTCIceCandidate::default()),
+            Message::IceCandidate(RTCIceCandidateInit::default()),
             Message::Bye,
         ];
         for message in messages {

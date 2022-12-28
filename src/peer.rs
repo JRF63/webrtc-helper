@@ -156,7 +156,9 @@ where
                 let peer = weak_ref.clone();
                 Box::pin(async move {
                     if let (Some(peer), Some(candidate)) = (peer.upgrade(), candidate) {
-                        let _ = peer.signaler.send(Message::IceCandidate(candidate)).await;
+                        if let Ok(json) = candidate.to_json() {
+                            let _ = peer.signaler.send(Message::IceCandidate(json)).await;
+                        }
                     }
                 })
             }));
@@ -164,7 +166,7 @@ where
         let peer_clone = peer.clone();
         tokio::spawn(async move {
             // TODO: swallow errors
-            let peer = peer_clone.clone();
+            let peer = peer_clone;
             while !peer.is_closed() {
                 if let Ok(msg) = peer.signaler.recv().await {
                     match msg {
@@ -181,7 +183,7 @@ where
                         }
                         Message::IceCandidate(candidate) => {
                             peer.peer_connection
-                                .add_ice_candidate(candidate.to_json()?)
+                                .add_ice_candidate(candidate)
                                 .await?;
                         }
                         Message::Bye => {
