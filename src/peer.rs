@@ -3,6 +3,7 @@ use crate::{
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
+    codecs::Codec
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -99,6 +100,11 @@ where
                 } else {
                     panic!("Registered too many codecs");
                 }
+            }
+
+            if let Some(payload_type) = payload_id {
+                // Needed for H264 playback some reason
+                Codec::register_ulpfec(&mut media_engine, payload_type)?;
             }
         }
 

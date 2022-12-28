@@ -61,6 +61,22 @@ impl Codec {
         }
     }
 
+    pub(crate) fn register_ulpfec(media_engine: &mut MediaEngine, payload_type: u8) -> Result<()> {
+        let ulpfec_params = RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type: "video/ulpfec".to_owned(),
+                clock_rate: 90000,
+                channels: 0,
+                sdp_fmtp_line: "".to_owned(),
+                rtcp_feedback: Vec::new(),
+            },
+            payload_type,
+            ..Default::default()
+        };
+        media_engine.register_codec(ulpfec_params, RTPCodecType::Video)?;
+        Ok(())
+    }
+
     pub(crate) fn kind(&self) -> RTPCodecType {
         self.kind
     }
