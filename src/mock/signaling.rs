@@ -38,7 +38,7 @@ impl MockSignaler {
 
 #[cfg(test)]
 mod tests {
-    use webrtc::ice_transport::ice_candidate::RTCIceCandidate;
+    use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
     use super::*;
 
     #[tokio::test]
@@ -46,9 +46,9 @@ mod tests {
         let (a, b) = MockSignaler::channel();
 
         tokio::spawn(async move {
-            let msg = Message::IceCandidate(RTCIceCandidate {
-                priority: 42,
-                ..RTCIceCandidate::default()
+            let msg = Message::IceCandidate(RTCIceCandidateInit {
+                candidate: "test".to_owned(),
+                ..RTCIceCandidateInit::default()
             });
             a.send(msg).await.unwrap();
         });
@@ -56,7 +56,7 @@ mod tests {
         tokio::spawn(async move {
             let msg = b.recv().await.unwrap();
             if let Message::IceCandidate(c) = msg {
-                assert_eq!(c.priority, 42);
+                assert_eq!(c.candidate, "test");
             }
         });
     }
