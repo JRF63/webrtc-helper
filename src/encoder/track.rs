@@ -1,5 +1,5 @@
 use super::{EncoderBuilder, TrackLocalEvent};
-use crate::interceptor::twcc::TwccBandwidthEstimate;
+use crate::{interceptor::twcc::TwccBandwidthEstimate, peer::IceConnectionState};
 use async_trait::async_trait;
 use std::any::Any;
 use tokio::sync::{
@@ -24,6 +24,7 @@ enum TrackLocalData {
 
 pub struct EncoderTrackLocal {
     data: Mutex<TrackLocalData>,
+    ice_connection_state: IceConnectionState,
     bandwidth_estimate: TwccBandwidthEstimate,
     id: String,
     stream_id: String,
@@ -59,7 +60,12 @@ impl TrackLocal for EncoderTrackLocal {
 
                         if let TrackLocalData::Builder(builder) = sender {
                             let encoder = builder.build(codec, t);
-                            encoder.start(rx, rtp_track, self.bandwidth_estimate.clone());
+                            encoder.start(
+                                rx,
+                                rtp_track,
+                                self.ice_connection_state.clone(),
+                                self.bandwidth_estimate.clone(),
+                            );
                         }
 
                         return Ok(codec.clone());
@@ -110,6 +116,7 @@ impl TrackLocal for EncoderTrackLocal {
 impl EncoderTrackLocal {
     pub fn new(
         encoder_builder: Box<dyn EncoderBuilder>,
+        ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
     ) -> Option<EncoderTrackLocal> {
         let codecs = encoder_builder.supported_codecs();
@@ -136,6 +143,7 @@ impl EncoderTrackLocal {
 
         Some(EncoderTrackLocal {
             data: Mutex::new(TrackLocalData::Builder(encoder_builder)),
+            ice_connection_state,
             bandwidth_estimate,
             id,
             stream_id,

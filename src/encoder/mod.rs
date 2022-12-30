@@ -1,9 +1,13 @@
 mod track;
 
 pub use self::track::EncoderTrackLocal;
-use crate::{codecs::Codec, interceptor::twcc::TwccBandwidthEstimate, util::data_rate::DataRate};
+use crate::{
+    codecs::Codec, interceptor::twcc::TwccBandwidthEstimate, peer::IceConnectionState,
+    util::data_rate::DataRate,
+};
 use tokio::sync::mpsc::{error::TryRecvError, Receiver};
 use webrtc::{
+    ice_transport::ice_connection_state::RTCIceConnectionState,
     rtp::packet::Packet,
     rtp_transceiver::rtp_codec::RTCRtpCodecParameters,
     track::track_local::{
@@ -54,6 +58,7 @@ pub trait Encoder: Send {
         mut self: Box<Self>,
         mut receiver: Receiver<TrackLocalEvent>,
         rtp_track: TrackLocalStaticRTP,
+        mut ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
     ) where
         // TODO: Why 'static??
@@ -66,6 +71,14 @@ pub trait Encoder: Send {
                 .build()
                 .unwrap()
                 .block_on(async move {
+                    // Wait for connection before sending data
+                    while *ice_connection_state.borrow() != RTCIceConnectionState::Connected {
+                        if let Err(_) = ice_connection_state.changed().await {
+                            // Sender closed
+                            return;
+                        }
+                    }
+
                     // TODO: Check if the calls to `packets` and `set_data_rate` passes through a v-table.
                     loop {
                         match receiver.try_recv() {
@@ -83,8 +96,10 @@ pub trait Encoder: Send {
 
                                 // TODO: Proper MTU estimation
                                 const MTU: usize = 1200;
-                                
-                                for packet in self.packets(MTU, bandwidth_estimate.get_estimate()).iter() {
+
+                                for packet in
+                                    self.packets(MTU, bandwidth_estimate.get_estimate()).iter()
+                                {
                                     // TODO: Random errors here
                                     if let Err(_err) = rtp_track.write_rtp(packet).await {
                                         // TODO: log error

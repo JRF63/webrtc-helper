@@ -1,15 +1,15 @@
 use crate::{
+    codecs::Codec,
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
-    codecs::Codec
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch::{self, Receiver}};
 use webrtc::{
     api::{
         interceptor_registry::{configure_nack, configure_rtcp_reports},
@@ -18,7 +18,7 @@ use webrtc::{
         APIBuilder,
     },
     ice::mdns::MulticastDnsMode,
-    ice_transport::ice_server::RTCIceServer,
+    ice_transport::{ice_connection_state::RTCIceConnectionState, ice_server::RTCIceServer},
     interceptor::registry::Registry,
     peer_connection::{
         configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType, RTCPeerConnection,
@@ -30,6 +30,11 @@ use webrtc::{
     track::track_remote::TrackRemote,
 };
 
+/// Used for querying `RTCIceConnectionState` in the encoders/decoders.
+pub type IceConnectionState = Receiver<RTCIceConnectionState>;
+
+// TODO: Implement the polite/non-polite peer instead:
+// https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
 pub enum Role {
     Offerer,
     Answerer,
@@ -163,6 +168,13 @@ where
                 })
             }));
 
+        let (ice_tx, ice_rx) = watch::channel(RTCIceConnectionState::default());
+        peer.peer_connection
+            .on_ice_connection_state_change(Box::new(move |state| {
+                let _ = ice_tx.send(state);
+                Box::pin(async {})
+            }));
+
         let peer_clone = peer.clone();
         tokio::spawn(async move {
             // TODO: swallow errors
@@ -182,9 +194,7 @@ where
                             }
                         }
                         Message::IceCandidate(candidate) => {
-                            peer.peer_connection
-                                .add_ice_candidate(candidate)
-                                .await?;
+                            peer.peer_connection.add_ice_candidate(candidate).await?;
                         }
                         Message::Bye => {
                             peer.close().await;
@@ -197,35 +207,37 @@ where
         });
 
         let decoders = Arc::new(Mutex::new(self.decoders));
-        peer.peer_connection
-            .on_track(Box::new(
-                move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
-                    let (Some(track), Some(receiver)) = (track, receiver) else {
+        peer.peer_connection.on_track(Box::new(
+            move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
+                let (Some(track), Some(receiver)) = (track, receiver) else {
                         return Box::pin(async move {});
                     };
 
-                    let decoders = decoders.clone();
+                let decoders = decoders.clone();
 
-                    Box::pin(async move {
-                        let codec = track.codec().await;
-                        let mut decoders = decoders.lock().await;
-                        let mut matched_index = None;
-                        for (index, decoder) in decoders.iter().enumerate() {
-                            if decoder.is_codec_supported(&codec) {
-                                matched_index = Some(index);
-                            }
+                Box::pin(async move {
+                    let codec = track.codec().await;
+                    let mut decoders = decoders.lock().await;
+                    let mut matched_index = None;
+                    for (index, decoder) in decoders.iter().enumerate() {
+                        if decoder.is_codec_supported(&codec) {
+                            matched_index = Some(index);
                         }
-                        if let Some(index) = matched_index {
-                            let decoder = decoders.swap_remove(index);
-                            decoder.build(track, receiver);
-                        }
-                    })
-                },
-            ));
+                    }
+                    if let Some(index) = matched_index {
+                        let decoder = decoders.swap_remove(index);
+                        decoder.build(track, receiver);
+                    }
+                })
+            },
+        ));
 
         for encoder_builder in self.encoders {
-            if let Some(track) = EncoderTrackLocal::new(encoder_builder, bandwidth_estimate.clone())
-            {
+            if let Some(track) = EncoderTrackLocal::new(
+                encoder_builder,
+                ice_rx.clone(),
+                bandwidth_estimate.clone(),
+            ) {
                 let track = Arc::new(track);
                 let transceiver = peer
                     .peer_connection
