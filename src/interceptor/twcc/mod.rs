@@ -5,4 +5,3 @@ mod sync;
 mod time;
 
 pub use interceptor::TwccInterceptorBuilder;
-pub use sync::TwccBandwidthEstimate;

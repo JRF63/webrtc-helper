@@ -6,15 +6,12 @@ use webrtc::rtcp::transport_feedbacks::transport_layer_cc::{
 };
 
 use self::{delay_based::DelayBasedBandwidthEstimator, loss_based::LossBasedBandwidthEstimator};
-use super::{
-    sync::{TwccBandwidthEstimate, TwccSendInfo},
-    time::TwccTime,
-};
-use crate::util::data_rate::DataRate;
+use super::{sync::TwccSendInfo, time::TwccTime};
+use crate::util::data_rate::{DataRate, TwccBandwidthSender};
 use std::time::Instant;
 
 pub struct TwccBandwidthEstimator {
-    estimate: TwccBandwidthEstimate,
+    estimate_sender: TwccBandwidthSender,
     delay_based_estimator: DelayBasedBandwidthEstimator,
     loss_based_estimator: LossBasedBandwidthEstimator,
     received: u32,
@@ -22,9 +19,9 @@ pub struct TwccBandwidthEstimator {
 }
 
 impl TwccBandwidthEstimator {
-    pub fn new(estimate: TwccBandwidthEstimate) -> TwccBandwidthEstimator {
+    pub fn new(estimate_sender: TwccBandwidthSender) -> TwccBandwidthEstimator {
         TwccBandwidthEstimator {
-            estimate,
+            estimate_sender,
             delay_based_estimator: DelayBasedBandwidthEstimator::new(),
             loss_based_estimator: LossBasedBandwidthEstimator::new(),
             received: 0,
@@ -33,14 +30,21 @@ impl TwccBandwidthEstimator {
     }
 
     pub fn estimate(&mut self, now: Instant) {
-        let current_bandwidth = self.estimate.get_estimate().bytes_per_sec_f64();
+        let current_bandwidth = self.estimate_sender.borrow().bytes_per_sec_f64();
         let a = self.delay_based_estimator.estimate(current_bandwidth, now);
         let b = self
             .loss_based_estimator
             .estimate(current_bandwidth, self.received, self.lost);
         let bandwidth = f64::min(a, b);
-        self.estimate
-            .set_estimate(DataRate::from_bytes_per_sec_f64(bandwidth));
+        self.estimate_sender
+            .send_if_modified(|data_rate: &mut DataRate| {
+                if bandwidth == current_bandwidth {
+                    false
+                } else {
+                    *data_rate = DataRate::from_bytes_per_sec_f64(bandwidth);
+                    true
+                }
+            });
 
         self.received = 0;
         self.lost = 0;

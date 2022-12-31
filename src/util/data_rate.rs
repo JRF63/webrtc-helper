@@ -1,3 +1,5 @@
+use tokio::sync::watch;
+
 #[derive(Clone, Copy, PartialEq, Default)]
 pub struct DataRate(f64);
 
@@ -21,14 +23,15 @@ impl DataRate {
     pub fn bytes_per_sec_f64(&self) -> f64 {
         self.0
     }
+}
 
-    #[inline]
-    pub(crate) fn as_blob(&self) -> u64 {
-        u64::from_le_bytes(self.0.to_le_bytes())
-    }
+pub type TwccBandwidthEstimate = watch::Receiver<DataRate>;
 
-    #[inline]
-    pub(crate) fn from_blob(blob: u64) -> DataRate {
-        DataRate(f64::from_le_bytes(blob.to_le_bytes()))
-    }
+pub type TwccBandwidthSender = watch::Sender<DataRate>;
+
+/// Create a new channel for sending/receiving the bandwidth estimate.
+pub(crate) fn twcc_bandwidth_estimate_channel(
+) -> (watch::Sender<DataRate>, watch::Receiver<DataRate>) {
+    const INIT_RATE: u64 = 1_000_000; // 1 Mbps
+    watch::channel(DataRate::from_bits_per_sec(INIT_RATE))
 }

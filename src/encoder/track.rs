@@ -1,5 +1,5 @@
 use super::{EncoderBuilder, TrackLocalEvent};
-use crate::{interceptor::twcc::TwccBandwidthEstimate, peer::IceConnectionState};
+use crate::{peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
 use async_trait::async_trait;
 use std::any::Any;
 use tokio::sync::{
@@ -59,13 +59,8 @@ impl TrackLocal for EncoderTrackLocal {
                         std::mem::swap(&mut *data, &mut sender);
 
                         if let TrackLocalData::Builder(builder) = sender {
-                            let encoder = builder.build(codec, t);
-                            encoder.start(
-                                rx,
-                                rtp_track,
-                                self.ice_connection_state.clone(),
-                                self.bandwidth_estimate.clone(),
-                            );
+                            let encoder = builder.build(codec, t, self.bandwidth_estimate.clone());
+                            encoder.start(rx, rtp_track, self.ice_connection_state.clone());
                         }
 
                         return Ok(codec.clone());

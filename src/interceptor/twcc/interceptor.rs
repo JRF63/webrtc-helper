@@ -1,16 +1,16 @@
 use super::{
-    estimator::TwccBandwidthEstimator,
-    sender::TwccTimestampSenderStream,
-    sync::{TwccBandwidthEstimate, TwccSendInfo},
+    estimator::TwccBandwidthEstimator, sender::TwccTimestampSenderStream, sync::TwccSendInfo,
 };
+use crate::util::data_rate::TwccBandwidthSender;
 use async_trait::async_trait;
 use std::{
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Instant, SystemTime},
 };
+use tokio::sync::Mutex;
 use webrtc::{
     interceptor::{
-        stream_info::StreamInfo, Attributes, Error, Interceptor, InterceptorBuilder, RTCPReader,
+        self, stream_info::StreamInfo, Attributes, Interceptor, InterceptorBuilder, RTCPReader,
         RTCPWriter, RTPReader, RTPWriter,
     },
     rtcp::{
@@ -29,7 +29,7 @@ pub struct TwccStream {
 impl TwccStream {
     pub fn new(
         map: TwccSendInfo,
-        estimate: TwccBandwidthEstimate,
+        estimate: TwccBandwidthSender,
         next_reader: Arc<dyn RTCPReader + Send + Sync>,
     ) -> TwccStream {
         TwccStream {
@@ -46,31 +46,28 @@ impl RTCPReader for TwccStream {
         &self,
         buf: &mut [u8],
         attributes: &Attributes,
-    ) -> Result<(usize, Attributes), Error> {
+    ) -> Result<(usize, Attributes), interceptor::Error> {
         let now = Instant::now();
 
         let (n, attr) = self.next_reader.read(buf, attributes).await?;
 
         let mut b = &buf[..n];
         let packets = rtcp::packet::unmarshal(&mut b)?;
+
+        let mut bandwidth_estimator = self.bandwidth_estimator.lock().await;
+
         for packet in packets {
             let packet = packet.as_any();
             if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
-                if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-                    bandwidth_estimator.process_feedback(tcc, &self.map);
-                }
+                bandwidth_estimator.process_feedback(tcc, &self.map);
             } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
                 if let Some(rtt_ms) = rtt_from_receiver_report(rr) {
-                    if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-                        bandwidth_estimator.update_rtt(rtt_ms);
-                    }
+                    bandwidth_estimator.update_rtt(rtt_ms);
                 }
             }
         }
 
-        if let Ok(mut bandwidth_estimator) = self.bandwidth_estimator.lock() {
-            bandwidth_estimator.estimate(now);
-        }
+        bandwidth_estimator.estimate(now);
 
         Ok((n, attr))
     }
@@ -100,7 +97,7 @@ fn calculate_rtt_ms(now: u32, delay: u32, last_sender_report: u32) -> f64 {
 
 pub struct TwccInterceptor {
     map: TwccSendInfo,
-    estimate: TwccBandwidthEstimate,
+    estimate_sender: Arc<Mutex<Option<TwccBandwidthSender>>>,
     start_time: Instant,
 }
 
@@ -110,11 +107,12 @@ impl Interceptor for TwccInterceptor {
         &self,
         reader: Arc<dyn RTCPReader + Send + Sync>,
     ) -> Arc<dyn RTCPReader + Send + Sync> {
-        Arc::new(TwccStream::new(
-            self.map.clone(),
-            self.estimate.clone(),
-            reader,
-        ))
+        let mut lock = self.estimate_sender.lock().await;
+        if let Some(sender) = std::mem::take(&mut *lock) {
+            Arc::new(TwccStream::new(self.map.clone(), sender, reader))
+        } else {
+            reader
+        }
     }
 
     async fn bind_rtcp_writer(
@@ -162,34 +160,30 @@ impl Interceptor for TwccInterceptor {
 
     async fn unbind_remote_stream(&self, _info: &StreamInfo) {}
 
-    async fn close(&self) -> Result<(), Error> {
+    async fn close(&self) -> Result<(), interceptor::Error> {
         Ok(())
     }
 }
 
 pub struct TwccInterceptorBuilder {
     map: TwccSendInfo,
-    estimate: TwccBandwidthEstimate,
+    estimate_sender: Arc<Mutex<Option<TwccBandwidthSender>>>,
 }
 
 impl TwccInterceptorBuilder {
-    pub fn new() -> (TwccInterceptorBuilder, TwccBandwidthEstimate) {
-        let estimate = TwccBandwidthEstimate::new();
-        (
-            TwccInterceptorBuilder {
-                map: TwccSendInfo::new(),
-                estimate: estimate.clone(),
-            },
-            estimate,
-        )
+    pub fn new(estimate: TwccBandwidthSender) -> TwccInterceptorBuilder {
+        TwccInterceptorBuilder {
+            map: TwccSendInfo::new(),
+            estimate_sender: Arc::new(Mutex::new(Some(estimate))),
+        }
     }
 }
 
 impl InterceptorBuilder for TwccInterceptorBuilder {
-    fn build(&self, _id: &str) -> Result<Arc<dyn Interceptor + Send + Sync>, Error> {
+    fn build(&self, _id: &str) -> Result<Arc<dyn Interceptor + Send + Sync>, interceptor::Error> {
         Ok(Arc::new(TwccInterceptor {
             map: self.map.clone(),
-            estimate: self.estimate.clone(),
+            estimate_sender: self.estimate_sender.clone(),
             start_time: Instant::now(),
         }))
     }

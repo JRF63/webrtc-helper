@@ -1,4 +1,4 @@
-use super::{sync::{TwccSendInfo}, time::TwccTime};
+use super::{sync::TwccSendInfo, time::TwccTime};
 use async_trait::async_trait;
 use std::{sync::Arc, time::Instant};
 use webrtc::{

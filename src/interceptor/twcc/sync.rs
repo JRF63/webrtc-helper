@@ -1,5 +1,4 @@
 use super::time::TwccTime;
-use crate::util::data_rate::DataRate;
 use std::sync::{
     atomic::{AtomicI64, AtomicU64, Ordering},
     Arc,
@@ -44,28 +43,5 @@ impl TwccSendInfo {
             TwccTime::from_raw(a.load(Ordering::Acquire)),
             b.load(Ordering::Acquire),
         )
-    }
-}
-
-#[derive(Clone)]
-#[repr(transparent)]
-pub struct TwccBandwidthEstimate(Arc<AtomicU64>);
-
-impl TwccBandwidthEstimate {
-    pub fn new() -> TwccBandwidthEstimate {
-        // 1 Mbps
-        const INITIAL_BANDWIDTH: u64 = 50_000_000;
-
-        TwccBandwidthEstimate(Arc::new(AtomicU64::new(
-            DataRate::from_bits_per_sec(INITIAL_BANDWIDTH).as_blob(),
-        )))
-    }
-
-    pub(crate) fn set_estimate(&self, bandwidth: DataRate) {
-        self.0.store(bandwidth.as_blob(), Ordering::Release);
-    }
-
-    pub fn get_estimate(&self) -> DataRate {
-        DataRate::from_blob(self.0.load(Ordering::Acquire))
     }
 }

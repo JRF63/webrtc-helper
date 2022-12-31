@@ -1,10 +1,7 @@
 mod track;
 
 pub use self::track::EncoderTrackLocal;
-use crate::{
-    codecs::Codec, interceptor::twcc::TwccBandwidthEstimate, peer::IceConnectionState,
-    util::data_rate::DataRate,
-};
+use crate::{codecs::Codec, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
 use tokio::sync::mpsc::{error::TryRecvError, Receiver};
 use webrtc::{
     ice_transport::ice_connection_state::RTCIceConnectionState,
@@ -37,6 +34,7 @@ pub trait EncoderBuilder: Send {
         self: Box<Self>,
         codec_params: &RTCRtpCodecParameters,
         context: &TrackLocalContext,
+        bandwidth_estimate: TwccBandwidthEstimate,
     ) -> Box<dyn Encoder>;
 
     /// Checks if the encoder supports the given codec parameters.
@@ -52,14 +50,13 @@ pub trait EncoderBuilder: Send {
 
 pub trait Encoder: Send {
     /// Return the `Packets` for the current frame. This function is allowed to block.
-    fn packets(&mut self, mtu: usize, data_rate: DataRate) -> &[Packet];
+    fn packets(&mut self) -> &[Packet];
 
     fn start(
         mut self: Box<Self>,
         mut receiver: Receiver<TrackLocalEvent>,
         rtp_track: TrackLocalStaticRTP,
         mut ice_connection_state: IceConnectionState,
-        bandwidth_estimate: TwccBandwidthEstimate,
     ) where
         // TODO: Why 'static??
         Self: 'static,
@@ -97,9 +94,7 @@ pub trait Encoder: Send {
                                 // TODO: Proper MTU estimation
                                 const MTU: usize = 1200;
 
-                                for packet in
-                                    self.packets(MTU, bandwidth_estimate.get_estimate()).iter()
-                                {
+                                for packet in self.packets().iter() {
                                     // TODO: Random errors here
                                     if let Err(_err) = rtp_track.write_rtp(packet).await {
                                         // TODO: log error

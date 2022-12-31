@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{Mutex, watch::{self, Receiver}};
+use tokio::sync::{watch, Mutex};
 use webrtc::{
     api::{
         interceptor_registry::{configure_nack, configure_rtcp_reports},
@@ -31,7 +31,7 @@ use webrtc::{
 };
 
 /// Used for querying `RTCIceConnectionState` in the encoders/decoders.
-pub type IceConnectionState = Receiver<RTCIceConnectionState>;
+pub type IceConnectionState = watch::Receiver<RTCIceConnectionState>;
 
 // TODO: Implement the polite/non-polite peer instead:
 // https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
@@ -233,11 +233,9 @@ where
         ));
 
         for encoder_builder in self.encoders {
-            if let Some(track) = EncoderTrackLocal::new(
-                encoder_builder,
-                ice_rx.clone(),
-                bandwidth_estimate.clone(),
-            ) {
+            if let Some(track) =
+                EncoderTrackLocal::new(encoder_builder, ice_rx.clone(), bandwidth_estimate.clone())
+            {
                 let track = Arc::new(track);
                 let transceiver = peer
                     .peer_connection
