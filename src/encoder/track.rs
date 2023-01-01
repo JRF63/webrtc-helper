@@ -1,5 +1,5 @@
 use super::{EncoderBuilder, TrackLocalEvent};
-use crate::{peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
+use crate::{codecs::CodecType, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
 use async_trait::async_trait;
 use std::any::Any;
 use tokio::sync::{
@@ -119,10 +119,9 @@ impl EncoderTrackLocal {
         let mut audio = 0;
         let mut video = 0;
         for codec in codecs.iter() {
-            match codec.kind() {
-                RTPCodecType::Unspecified => return None,
-                RTPCodecType::Audio => audio += 1,
-                RTPCodecType::Video => video += 1,
+            match codec.codec_type() {
+                CodecType::Audio => audio += 1,
+                CodecType::Video => video += 1,
             }
         }
 

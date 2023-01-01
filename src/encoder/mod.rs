@@ -75,6 +75,7 @@ pub trait Encoder: Send {
                             return;
                         }
                     }
+                    std::thread::sleep(std::time::Duration::from_millis(500));
 
                     // TODO: Check if the calls to `packets` and `set_data_rate` passes through a v-table.
                     loop {
@@ -90,9 +91,6 @@ pub trait Encoder: Send {
                                 // `Bind` already passed as the first event. This means that
                                 // `rtp_track` will be `bind`ed beforehand in the first branch of
                                 // this map and its `write_rtp` method should succeed.
-
-                                // TODO: Proper MTU estimation
-                                const MTU: usize = 1200;
 
                                 for packet in self.packets().iter() {
                                     // TODO: Random errors here

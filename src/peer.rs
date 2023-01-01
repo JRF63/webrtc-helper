@@ -1,5 +1,5 @@
 use crate::{
-    codecs::Codec,
+    codecs::{Codec, CodecType, MediaEngineExt},
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,
@@ -49,7 +49,6 @@ where
     encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
     ice_servers: Vec<RTCIceServer>,
-    mdns: bool,
 }
 
 impl<S> WebRtcBuilder<S>
@@ -63,7 +62,6 @@ where
             encoders: Vec::new(),
             decoders: Vec::new(),
             ice_servers: Vec::new(),
-            mdns: false,
         }
     }
 
@@ -97,19 +95,34 @@ where
 
             let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
 
-            for codec in codecs {
+            for mut codec in codecs {
                 if let Some(payload_type) = payload_id {
-                    let num_registered =
-                        codec.register_to_media_engine(&mut media_engine, payload_type)?;
-                    payload_id = payload_type.checked_add(num_registered);
+                    codec.set_payload_type(payload_type);
+                    media_engine.register_custom_codec(codec.clone())?;
+                    payload_id = payload_type.checked_add(1);
+
+                    // Register for retransmission
+                    if let Some(mut retransmission) = Codec::retransmission(&codec) {
+                        if let Some(payload_type) = payload_id {
+                            retransmission.set_payload_type(payload_type);
+                            media_engine.register_custom_codec(retransmission)?;
+                            payload_id = payload_type.checked_add(1);
+                        } else {
+                            panic!("Not enough payload type for video retransmission");
+                        }
+                    }
                 } else {
                     panic!("Registered too many codecs");
                 }
             }
 
             if let Some(payload_type) = payload_id {
-                // Needed for H264 playback some reason
-                Codec::register_ulpfec(&mut media_engine, payload_type)?;
+                // Needed for playback of non-constrained-baseline H264 for some reason
+                let mut ulpfec = Codec::ulpfec();
+                ulpfec.set_payload_type(payload_type);
+                media_engine.register_custom_codec(ulpfec)?;
+            } else {
+                panic!("Not enough payload type for ULPFEC");
             }
         }
 
@@ -117,10 +130,9 @@ where
         let registry = configure_rtcp_reports(registry);
         let (registry, bandwidth_estimate) = configure_custom_twcc(registry, &mut media_engine)?;
 
+        // Enabling mDNS hides local IP addresses
         let mut setting_engine = SettingEngine::default();
-        if self.mdns {
-            setting_engine.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
-        }
+        setting_engine.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
 
         let api_builder = APIBuilder::new()
             .with_media_engine(media_engine)
@@ -129,7 +141,7 @@ where
             .build();
 
         let peer = Arc::new(WebRtcPeer {
-            peer_connection: api_builder
+            pc: api_builder
                 .new_peer_connection(RTCConfiguration {
                     ice_servers: self.ice_servers,
                     ..Default::default()
@@ -142,34 +154,33 @@ where
         match self.role {
             Role::Offerer => {
                 let weak_ref = Arc::downgrade(&peer);
-                peer.peer_connection
-                    .on_negotiation_needed(Box::new(move || {
-                        let peer = weak_ref.clone();
-                        Box::pin(async move {
-                            if let Some(peer) = peer.upgrade() {
-                                peer.start_negotiation().await;
-                            }
-                        })
-                    }));
+                peer.pc.on_negotiation_needed(Box::new(move || {
+                    let peer = weak_ref.clone();
+                    Box::pin(async move {
+                        if let Some(peer) = peer.upgrade() {
+                            peer.start_negotiation().await;
+                        }
+                    })
+                }));
             }
             Role::Answerer => (),
         }
 
         let weak_ref = Arc::downgrade(&peer);
-        peer.peer_connection
-            .on_ice_candidate(Box::new(move |candidate| {
-                let peer = weak_ref.clone();
-                Box::pin(async move {
-                    if let (Some(peer), Some(candidate)) = (peer.upgrade(), candidate) {
-                        if let Ok(json) = candidate.to_json() {
-                            let _ = peer.signaler.send(Message::IceCandidate(json)).await;
-                        }
+        peer.pc.on_ice_candidate(Box::new(move |candidate| {
+            let peer = weak_ref.clone();
+            Box::pin(async move {
+                if let (Some(peer), Some(candidate)) = (peer.upgrade(), candidate) {
+                    if let Ok(json) = candidate.to_json() {
+                        println!("{json:?}");
+                        let _ = peer.signaler.send(Message::IceCandidate(json)).await;
                     }
-                })
-            }));
+                }
+            })
+        }));
 
         let (ice_tx, ice_rx) = watch::channel(RTCIceConnectionState::default());
-        peer.peer_connection
+        peer.pc
             .on_ice_connection_state_change(Box::new(move |state| {
                 let _ = ice_tx.send(state);
                 Box::pin(async {})
@@ -184,17 +195,15 @@ where
                     match msg {
                         Message::Sdp(sdp) => {
                             let sdp_type = sdp.sdp_type;
-                            peer.peer_connection.set_remote_description(sdp).await?;
+                            peer.pc.set_remote_description(sdp).await?;
                             if sdp_type == RTCSdpType::Offer {
-                                let answer = peer.peer_connection.create_answer(None).await?;
-                                peer.peer_connection
-                                    .set_local_description(answer.clone())
-                                    .await?;
+                                let answer = peer.pc.create_answer(None).await?;
+                                peer.pc.set_local_description(answer.clone()).await?;
                                 let _ = peer.signaler.send(Message::Sdp(answer)).await;
                             }
                         }
                         Message::IceCandidate(candidate) => {
-                            peer.peer_connection.add_ice_candidate(candidate).await?;
+                            peer.pc.add_ice_candidate(candidate).await?;
                         }
                         Message::Bye => {
                             peer.close().await;
@@ -207,7 +216,7 @@ where
         });
 
         let decoders = Arc::new(Mutex::new(self.decoders));
-        peer.peer_connection.on_track(Box::new(
+        peer.pc.on_track(Box::new(
             move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
                 let (Some(track), Some(receiver)) = (track, receiver) else {
                         return Box::pin(async move {});
@@ -238,7 +247,7 @@ where
             {
                 let track = Arc::new(track);
                 let transceiver = peer
-                    .peer_connection
+                    .pc
                     .add_transceiver_from_track(
                         track,
                         &[RTCRtpTransceiverInit {
@@ -266,7 +275,7 @@ where
 }
 
 pub struct WebRtcPeer<S: Signaler + 'static> {
-    peer_connection: RTCPeerConnection,
+    pc: RTCPeerConnection,
     signaler: S,
     closed: AtomicBool,
 }
@@ -286,11 +295,8 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
     }
 
     pub async fn start_negotiation(&self) {
-        if let Ok(offer) = self.peer_connection.create_offer(None).await {
-            let _ = self
-                .peer_connection
-                .set_local_description(offer.clone())
-                .await;
+        if let Ok(offer) = self.pc.create_offer(None).await {
+            let _ = self.pc.set_local_description(offer.clone()).await;
             let _ = self.signaler.send(Message::Sdp(offer)).await;
         };
     }

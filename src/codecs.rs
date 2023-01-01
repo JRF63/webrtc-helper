@@ -1,6 +1,5 @@
 use webrtc::{
     api::media_engine::MediaEngine,
-    error::Result,
     rtp_transceiver::{
         rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType},
         RTCPFeedback,
@@ -9,60 +8,79 @@ use webrtc::{
 
 const MIME_TYPE_H264: &str = "video/H264";
 const MIME_TYPE_OPUS: &str = "audio/opus";
-// TODO H264:
+
+// TODO H265:
 // See https://www.rfc-editor.org/rfc/rfc7798#section-7.1
 // const MIME_TYPE_H265: &str = "video/H265";
 
-#[derive(Clone)]
+/// The type of a [Codec].
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CodecType {
+    Audio = 1,
+    Video = 2,
+}
+
+impl Into<RTPCodecType> for CodecType {
+    fn into(self) -> RTPCodecType {
+        match self {
+            CodecType::Audio => RTPCodecType::Audio,
+            CodecType::Video => RTPCodecType::Video,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codec {
     parameters: RTCRtpCodecParameters,
-    kind: RTPCodecType,
+    codec_type: CodecType,
 }
 
 impl Codec {
-    /// Create a new `Codec`.
-    pub fn new(parameters: RTCRtpCodecParameters, kind: RTPCodecType) -> Codec {
-        Codec { parameters, kind }
-    }
-
-    /// Configure the media engine to use the codec and returns the number of codecs registered.
-    pub(crate) fn register_to_media_engine(
-        &self,
-        media_engine: &mut MediaEngine,
-        payload_type: u8,
-    ) -> Result<u8> {
-        // Register the codec itself
-        media_engine.register_codec(
-            RTCRtpCodecParameters {
-                payload_type,
-                ..self.parameters.clone()
-            },
-            self.kind,
-        )?;
-
-        // If video, also register for retransmission
-        if self.kind == RTPCodecType::Video {
-            let rfc4588_payload_type = payload_type.wrapping_add(1);
-            // Parameters needs to have the same clockrate as the video to be retransmitted
-            let rfc4588_params = RTCRtpCodecParameters {
-                capability: RTCRtpCodecCapability {
-                    mime_type: "video/rtx".to_owned(),
-                    sdp_fmtp_line: format!("apt={}", payload_type),
-                    rtcp_feedback: Vec::new(),
-                    ..self.parameters.clone().capability
-                },
-                payload_type: rfc4588_payload_type,
-                ..Default::default()
-            };
-            media_engine.register_codec(rfc4588_params, RTPCodecType::Video)?;
-            Ok(2)
-        } else {
-            Ok(1)
+    /// Create a new [Codec].
+    pub fn new(parameters: RTCRtpCodecParameters, codec_type: CodecType) -> Codec {
+        Codec {
+            parameters,
+            codec_type,
         }
     }
 
-    pub(crate) fn register_ulpfec(media_engine: &mut MediaEngine, payload_type: u8) -> Result<()> {
-        let ulpfec_params = RTCRtpCodecParameters {
+    /// Returns the type (audio/video) of the [Codec].
+    pub fn codec_type(&self) -> CodecType {
+        self.codec_type
+    }
+
+    /// Modifies the payload type of the [Codec].
+    pub fn set_payload_type(&mut self, payload_type: u8) {
+        self.parameters.payload_type = payload_type;
+    }
+
+    /// Create an [RFC4588][RFC4588] retransmission [Codec] from a base video [Codec]. Returns
+    /// [None] if `base_codec` is of type [CodecType::Audio].
+    ///
+    /// [RFC4588]: https://www.rfc-editor.org/rfc/rfc4588
+    pub fn retransmission(base_codec: &Codec) -> Option<Codec> {
+        if base_codec.codec_type() == CodecType::Audio {
+            return None;
+        }
+
+        let parameters = RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type: "video/rtx".to_owned(),
+                sdp_fmtp_line: format!("apt={}", base_codec.parameters.payload_type),
+                rtcp_feedback: Vec::new(),
+                ..base_codec.parameters.capability.clone()
+            },
+            ..Default::default()
+        };
+
+        Some(Codec::new(parameters, CodecType::Video))
+    }
+
+    /// Create an [RFC5109][RFC5109] [Codec].
+    ///
+    /// [RFC5109]: https://www.rfc-editor.org/rfc/rfc5109
+    pub fn ulpfec() -> Codec {
+        let parameters = RTCRtpCodecParameters {
             capability: RTCRtpCodecCapability {
                 mime_type: "video/ulpfec".to_owned(),
                 clock_rate: 90000,
@@ -70,15 +88,9 @@ impl Codec {
                 sdp_fmtp_line: "".to_owned(),
                 rtcp_feedback: Vec::new(),
             },
-            payload_type,
             ..Default::default()
         };
-        media_engine.register_codec(ulpfec_params, RTPCodecType::Video)?;
-        Ok(())
-    }
-
-    pub(crate) fn kind(&self) -> RTPCodecType {
-        self.kind
+        Codec::new(parameters, CodecType::Video)
     }
 
     pub(crate) fn matches_parameters(&self, parameters: &RTCRtpCodecParameters) -> bool {
@@ -105,8 +117,7 @@ impl Codec {
             payload_type: 0,
             ..Default::default()
         };
-        let kind = RTPCodecType::Audio;
-        Codec { parameters, kind }
+        Codec::new(parameters, CodecType::Audio)
     }
 
     pub fn h264_custom(
@@ -141,11 +152,10 @@ impl Codec {
             payload_type: 0,
             ..Default::default()
         };
-        let kind = RTPCodecType::Video;
-        Codec { parameters, kind }
+        Codec::new(parameters, CodecType::Video)
     }
 
-    /// H264 codec with parameters that are guaranteed to be supported by most browsers.
+    /// H264 [Codec] with parameters that are guaranteed to be supported by most browsers.
     pub fn h264() -> Codec {
         // profile_idc=0x42 (Constrained Baseline)
         // profile_iop=0b11100000
@@ -177,18 +187,15 @@ pub(crate) fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
     ]
 }
 
-// TODO:
-// fn ulpfec() -> RTCRtpCodecParameters {
-//     // https://github.com/webrtc-rs/webrtc/blob/c30b5c1db4668bb1314f32e0121270e1bb1dac7a/webrtc/src/api/media_engine/mod.rs#L367
-//     RTCRtpCodecParameters {
-//         capability: RTCRtpCodecCapability {
-//             mime_type: "video/ulpfec".to_owned(),
-//             clock_rate: 90000,
-//             channels: 0,
-//             sdp_fmtp_line: "".to_owned(),
-//             rtcp_feedback: Vec::new(),
-//         },
-//         payload_type: 0,
-//         ..Default::default()
-//     }
-// }
+/// Helper trait for adding methods to [MediaEngine].
+pub(crate) trait MediaEngineExt {
+    /// Register the [Codec] with a dynamically chose payload type.
+    fn register_custom_codec(&mut self, codec: Codec) -> Result<(), webrtc::Error>;
+}
+
+impl MediaEngineExt for MediaEngine {
+    fn register_custom_codec(&mut self, codec: Codec) -> Result<(), webrtc::Error> {
+        self.register_codec(codec.parameters, codec.codec_type.into())?;
+        Ok(())
+    }
+}
