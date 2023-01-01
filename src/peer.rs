@@ -21,7 +21,8 @@ use webrtc::{
     ice_transport::{ice_connection_state::RTCIceConnectionState, ice_server::RTCIceServer},
     interceptor::registry::Registry,
     peer_connection::{
-        configuration::RTCConfiguration, sdp::sdp_type::RTCSdpType, RTCPeerConnection,
+        configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
+        sdp::sdp_type::RTCSdpType, RTCPeerConnection,
     },
     rtp_transceiver::{
         rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
@@ -83,8 +84,6 @@ where
     pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer<S>>> {
         let mut media_engine = MediaEngine::default();
         {
-            const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
-
             let mut codecs = Vec::new();
             for encoder in self.encoders.iter() {
                 codecs.extend_from_slice(encoder.supported_codecs());
@@ -93,37 +92,7 @@ where
                 codecs.extend_from_slice(decoder.supported_codecs());
             }
 
-            let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
-
-            for mut codec in codecs {
-                if let Some(payload_type) = payload_id {
-                    codec.set_payload_type(payload_type);
-                    media_engine.register_custom_codec(codec.clone())?;
-                    payload_id = payload_type.checked_add(1);
-
-                    // Register for retransmission
-                    if let Some(mut retransmission) = Codec::retransmission(&codec) {
-                        if let Some(payload_type) = payload_id {
-                            retransmission.set_payload_type(payload_type);
-                            media_engine.register_custom_codec(retransmission)?;
-                            payload_id = payload_type.checked_add(1);
-                        } else {
-                            panic!("Not enough payload type for video retransmission");
-                        }
-                    }
-                } else {
-                    panic!("Registered too many codecs");
-                }
-            }
-
-            if let Some(payload_type) = payload_id {
-                // Needed for playback of non-constrained-baseline H264 for some reason
-                let mut ulpfec = Codec::ulpfec();
-                ulpfec.set_payload_type(payload_type);
-                media_engine.register_custom_codec(ulpfec)?;
-            } else {
-                panic!("Not enough payload type for ULPFEC");
-            }
+            Self::register_codecs(codecs, &mut media_engine)?;
         }
 
         let registry = configure_nack(Registry::new(), &mut media_engine);
@@ -158,7 +127,7 @@ where
                     let peer = weak_ref.clone();
                     Box::pin(async move {
                         if let Some(peer) = peer.upgrade() {
-                            peer.start_negotiation().await;
+                            peer.start_negotiation(false).await;
                         }
                     })
                 }));
@@ -180,39 +149,24 @@ where
         }));
 
         let (ice_tx, ice_rx) = watch::channel(RTCIceConnectionState::default());
+        let weak_ref = Arc::downgrade(&peer);
         peer.pc
             .on_ice_connection_state_change(Box::new(move |state| {
                 let _ = ice_tx.send(state);
-                Box::pin(async {})
+                let peer = weak_ref.clone();
+                Box::pin(async move {
+                    if let Some(peer) = peer.upgrade() {
+                        // TODO: Test ICE restart
+                        peer.start_negotiation(true).await;
+                    }
+                })
             }));
 
         let peer_clone = peer.clone();
         tokio::spawn(async move {
-            // TODO: swallow errors
-            let peer = peer_clone;
-            while !peer.is_closed() {
-                if let Ok(msg) = peer.signaler.recv().await {
-                    match msg {
-                        Message::Sdp(sdp) => {
-                            let sdp_type = sdp.sdp_type;
-                            peer.pc.set_remote_description(sdp).await?;
-                            if sdp_type == RTCSdpType::Offer {
-                                let answer = peer.pc.create_answer(None).await?;
-                                peer.pc.set_local_description(answer.clone()).await?;
-                                let _ = peer.signaler.send(Message::Sdp(answer)).await;
-                            }
-                        }
-                        Message::IceCandidate(candidate) => {
-                            peer.pc.add_ice_candidate(candidate).await?;
-                        }
-                        Message::Bye => {
-                            peer.close().await;
-                            break;
-                        }
-                    }
-                }
+            if let Err(e) = Self::handle_signaler_message(peer_clone).await {
+                panic!("{e}");
             }
-            webrtc::error::Result::Ok(())
         });
 
         let decoders = Arc::new(Mutex::new(self.decoders));
@@ -268,9 +222,74 @@ where
             }
         }
 
-        // TODO: ICE restart
-
         Ok(peer)
+    }
+
+    fn register_codecs(
+        codecs: Vec<Codec>,
+        media_engine: &mut MediaEngine,
+    ) -> Result<(), webrtc::Error> {
+        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
+
+        let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
+
+        for mut codec in codecs {
+            if let Some(payload_type) = payload_id {
+                codec.set_payload_type(payload_type);
+                media_engine.register_custom_codec(codec.clone())?;
+                payload_id = payload_type.checked_add(1);
+
+                // Register for retransmission
+                if let Some(mut retransmission) = Codec::retransmission(&codec) {
+                    if let Some(payload_type) = payload_id {
+                        retransmission.set_payload_type(payload_type);
+                        media_engine.register_custom_codec(retransmission)?;
+                        payload_id = payload_type.checked_add(1);
+                    } else {
+                        panic!("Not enough payload type for video retransmission");
+                    }
+                }
+            } else {
+                panic!("Registered too many codecs");
+            }
+        }
+
+        if let Some(payload_type) = payload_id {
+            // Needed for playback of non-constrained-baseline H264 for some reason
+            let mut ulpfec = Codec::ulpfec();
+            ulpfec.set_payload_type(payload_type);
+            media_engine.register_custom_codec(ulpfec)?;
+        } else {
+            panic!("Not enough payload type for ULPFEC");
+        }
+
+        Ok(())
+    }
+
+    async fn handle_signaler_message(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
+        while !peer.is_closed() {
+            if let Ok(msg) = peer.signaler.recv().await {
+                match msg {
+                    Message::Sdp(sdp) => {
+                        let sdp_type = sdp.sdp_type;
+                        peer.pc.set_remote_description(sdp).await?;
+                        if sdp_type == RTCSdpType::Offer {
+                            let answer = peer.pc.create_answer(None).await?;
+                            peer.pc.set_local_description(answer.clone()).await?;
+                            let _ = peer.signaler.send(Message::Sdp(answer)).await;
+                        }
+                    }
+                    Message::IceCandidate(candidate) => {
+                        peer.pc.add_ice_candidate(candidate).await?;
+                    }
+                    Message::Bye => {
+                        peer.close().await;
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -294,8 +313,16 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
         self.closed.load(Ordering::Acquire)
     }
 
-    pub async fn start_negotiation(&self) {
-        if let Ok(offer) = self.pc.create_offer(None).await {
+    pub async fn start_negotiation(&self, ice_restart: bool) {
+        let options = if ice_restart {
+            Some(RTCOfferOptions {
+                voice_activity_detection: false, // Seems unused
+                ice_restart: true,
+            })
+        } else {
+            None
+        };
+        if let Ok(offer) = self.pc.create_offer(options).await {
             let _ = self.pc.set_local_description(offer.clone()).await;
             let _ = self.signaler.send(Message::Sdp(offer)).await;
         };

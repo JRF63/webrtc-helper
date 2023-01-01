@@ -29,6 +29,7 @@ impl Into<RTPCodecType> for CodecType {
     }
 }
 
+/// Abstraction of a media codec for registering in a [MediaEngine].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Codec {
     parameters: RTCRtpCodecParameters,
