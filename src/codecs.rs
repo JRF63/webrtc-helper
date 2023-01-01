@@ -54,6 +54,19 @@ impl Codec {
         self.parameters.payload_type = payload_type;
     }
 
+    /// Checks if the [Codec] has the same [RTCRtpCodecCapability] as `parameters`.
+    pub fn capability_matches(&self, parameters: &RTCRtpCodecParameters) -> bool {
+        // All parameters except `rtcp_feedback` should match
+        let codec_matches = |a: &RTCRtpCodecCapability, b: &RTCRtpCodecCapability| {
+            a.mime_type == b.mime_type
+                && a.clock_rate == b.clock_rate
+                && a.channels == b.channels
+                && a.sdp_fmtp_line == b.sdp_fmtp_line
+        };
+
+        codec_matches(&self.parameters.capability, &parameters.capability)
+    }
+
     /// Create an [RFC4588][RFC4588] retransmission [Codec] from a base video [Codec]. Returns
     /// [None] if `base_codec` is of type [CodecType::Audio].
     ///
@@ -93,18 +106,7 @@ impl Codec {
         Codec::new(parameters, CodecType::Video)
     }
 
-    pub(crate) fn matches_parameters(&self, parameters: &RTCRtpCodecParameters) -> bool {
-        // All parameters except `rtcp_feedback` should match
-        let codec_matches = |a: &RTCRtpCodecCapability, b: &RTCRtpCodecCapability| {
-            a.mime_type == b.mime_type
-                && a.clock_rate == b.clock_rate
-                && a.channels == b.channels
-                && a.sdp_fmtp_line == b.sdp_fmtp_line
-        };
-
-        codec_matches(&self.parameters.capability, &parameters.capability)
-    }
-
+    /// Create an Opus [Codec].
     pub fn opus() -> Codec {
         let parameters = RTCRtpCodecParameters {
             capability: RTCRtpCodecCapability {
@@ -120,6 +122,9 @@ impl Codec {
         Codec::new(parameters, CodecType::Audio)
     }
 
+    /// Create an H.264 [Codec] with the given parameters as defined in [RFC6184][RFC6184].
+    ///
+    /// [RFC6184]: https://www.rfc-editor.org/rfc/rfc6184.html#section-8.1
     pub fn h264_custom(
         profile_idc: u8,
         profile_iop: u8,
@@ -165,26 +170,10 @@ impl Codec {
 
 /// RTCP feedbacks that can be handled either by this crate or natively by webrtc-rs.
 pub(crate) fn supported_video_rtcp_feedbacks() -> Vec<RTCPFeedback> {
-    // "goog-remb" is replaced with "transport-cc"
-    // https://github.com/webrtc-rs/webrtc/blob/c30b5c1db4668bb1314f32e0121270e1bb1dac7a/webrtc/src/api/media_engine/mod.rs#L138
-    vec![
-        // RTCPFeedback {
-        //     typ: "transport-cc".to_owned(),
-        //     parameter: "".to_owned(),
-        // },
-        RTCPFeedback {
-            typ: "ccm".to_owned(),
-            parameter: "fir".to_owned(),
-        },
-        // RTCPFeedback {
-        //     typ: "nack".to_owned(),
-        //     parameter: "".to_owned(),
-        // },
-        // RTCPFeedback {
-        //     typ: "nack".to_owned(),
-        //     parameter: "pli".to_owned(),
-        // },
-    ]
+    vec![RTCPFeedback {
+        typ: "ccm".to_owned(),
+        parameter: "fir".to_owned(),
+    }]
 }
 
 /// Helper trait for adding methods to [MediaEngine].

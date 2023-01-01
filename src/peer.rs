@@ -1,5 +1,5 @@
 use crate::{
-    codecs::{Codec, CodecType, MediaEngineExt},
+    codecs::{Codec, MediaEngineExt},
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::configure_custom_twcc,

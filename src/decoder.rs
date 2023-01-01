@@ -12,7 +12,7 @@ pub trait DecoderBuilder: Send {
 
     fn is_codec_supported(&self, codec: &RTCRtpCodecParameters) -> bool {
         for supported_codec in self.supported_codecs() {
-            if supported_codec.matches_parameters(codec) {
+            if supported_codec.capability_matches(codec) {
                 return true;
             }
         }

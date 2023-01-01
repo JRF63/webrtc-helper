@@ -40,7 +40,7 @@ pub trait EncoderBuilder: Send {
     /// Checks if the encoder supports the given codec parameters.
     fn is_codec_supported(&self, codec_params: &RTCRtpCodecParameters) -> bool {
         for supported_codec in self.supported_codecs() {
-            if supported_codec.matches_parameters(codec_params) {
+            if supported_codec.capability_matches(codec_params) {
                 return true;
             }
         }
