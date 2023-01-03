@@ -55,8 +55,8 @@ impl Codec {
         self.parameters.payload_type = payload_type;
     }
 
-    /// Checks if the [Codec] has the same [RTCRtpCodecCapability] as `parameters`.
-    pub fn capability_matches(&self, parameters: &RTCRtpCodecParameters) -> bool {
+    /// Checks if the [Codec] has the same [RTCRtpCodecCapability] as `codec_capability`.
+    pub fn capability_matches(&self, codec_capability: &RTCRtpCodecCapability) -> bool {
         // All parameters except `rtcp_feedback` should match
         let codec_matches = |a: &RTCRtpCodecCapability, b: &RTCRtpCodecCapability| {
             a.mime_type == b.mime_type
@@ -65,7 +65,7 @@ impl Codec {
                 && a.sdp_fmtp_line == b.sdp_fmtp_line
         };
 
-        codec_matches(&self.parameters.capability, &parameters.capability)
+        codec_matches(&self.parameters.capability, codec_capability)
     }
 
     /// Create an [RFC4588][RFC4588] retransmission [Codec] from a base video [Codec]. Returns

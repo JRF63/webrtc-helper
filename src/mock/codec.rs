@@ -1,7 +1,5 @@
-use crate::codecs::{supported_video_rtcp_feedbacks, Codec};
-use webrtc::rtp_transceiver::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
-};
+use crate::codecs::{supported_video_rtcp_feedbacks, Codec, CodecType};
+use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters};
 
 pub(crate) fn mock_codec() -> Codec {
     let parameters = RTCRtpCodecParameters {
@@ -15,6 +13,5 @@ pub(crate) fn mock_codec() -> Codec {
         payload_type: 0,
         ..Default::default()
     };
-    let kind = RTPCodecType::Video;
-    Codec::new(parameters, kind)
+    Codec::new(parameters, CodecType::Video)
 }

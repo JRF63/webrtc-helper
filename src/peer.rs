@@ -24,18 +24,20 @@ use webrtc::{
         configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
         sdp::sdp_type::RTCSdpType, RTCPeerConnection,
     },
-    rtp_transceiver::{
-        rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
-        RTCRtpTransceiverInit,
-    },
+    rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
 };
 
 /// Used for querying `RTCIceConnectionState` in the encoders/decoders.
 pub type IceConnectionState = watch::Receiver<RTCIceConnectionState>;
 
-// TODO: Implement the polite/non-polite peer instead:
-// https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
+/// Determines if the peer will offer or wait for an SDP.
+///
+/// The role of each peer needs to be specified at the start since the `webrtc` crate does not
+/// support any form of rollback and cannot use ["perfect negotiation"][PN].
+///
+/// [PN]: https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Offerer,
     Answerer,
@@ -99,8 +101,15 @@ where
         let registry = configure_rtcp_reports(registry);
         let (registry, bandwidth_estimate) = configure_custom_twcc(registry, &mut media_engine)?;
 
-        // Enabling mDNS hides local IP addresses
         let mut setting_engine = SettingEngine::default();
+
+        // Leave mDNS disabled on debug builds because webrtc-rs does not handle it properly when
+        // communicating with another webrtc-rs instance
+        #[cfg(debug_assertions)]
+        setting_engine.set_ice_multicast_dns_mode(MulticastDnsMode::Unspecified);
+
+        // Enabling mDNS hides local IP addresses
+        #[cfg(not(debug_assertions))]
         setting_engine.set_ice_multicast_dns_mode(MulticastDnsMode::QueryAndGather);
 
         let api_builder = APIBuilder::new()
@@ -127,7 +136,9 @@ where
                     let peer = weak_ref.clone();
                     Box::pin(async move {
                         if let Some(peer) = peer.upgrade() {
-                            peer.start_negotiation(false).await;
+                            if let Err(e) = peer.start_negotiation(false).await {
+                                panic!("{e}");
+                            }
                         }
                     })
                 }));
@@ -141,7 +152,6 @@ where
             Box::pin(async move {
                 if let (Some(peer), Some(candidate)) = (peer.upgrade(), candidate) {
                     if let Ok(json) = candidate.to_json() {
-                        println!("{json:?}");
                         let _ = peer.signaler.send(Message::IceCandidate(json)).await;
                     }
                 }
@@ -155,9 +165,18 @@ where
                 let _ = ice_tx.send(state);
                 let peer = weak_ref.clone();
                 Box::pin(async move {
-                    if let Some(peer) = peer.upgrade() {
-                        // TODO: Test ICE restart
-                        peer.start_negotiation(true).await;
+                    if state == RTCIceConnectionState::Failed {
+                        match self.role {
+                            Role::Offerer => {
+                                if let Some(peer) = peer.upgrade() {
+                                    // TODO: Test ICE restart
+                                    if let Err(e) = peer.start_negotiation(true).await {
+                                        panic!("{e}");
+                                    }
+                                }
+                            }
+                            Role::Answerer => (), // Offerer should be the one to initiate ICE restart
+                        }
                     }
                 })
             }));
@@ -183,7 +202,7 @@ where
                     let mut decoders = decoders.lock().await;
                     let mut matched_index = None;
                     for (index, decoder) in decoders.iter().enumerate() {
-                        if decoder.is_codec_supported(&codec) {
+                        if decoder.is_codec_supported(&codec.capability) {
                             matched_index = Some(index);
                         }
                     }
@@ -196,30 +215,11 @@ where
         ));
 
         for encoder_builder in self.encoders {
-            if let Some(track) =
+            let track =
                 EncoderTrackLocal::new(encoder_builder, ice_rx.clone(), bandwidth_estimate.clone())
-            {
-                let track = Arc::new(track);
-                let transceiver = peer
-                    .pc
-                    .add_transceiver_from_track(
-                        track,
-                        &[RTCRtpTransceiverInit {
-                            direction: RTCRtpTransceiverDirection::Sendonly,
-                            send_encodings: Vec::new(),
-                        }],
-                    )
-                    .await?;
-
-                if let Some(sender) = transceiver.sender().await {
-                    tokio::spawn(async move {
-                        let mut buf = vec![0u8; 1500];
-                        while let Ok(_) = sender.read(&mut buf).await {}
-                    });
-                }
-            } else {
-                // TODO: log error
-            }
+                    .await;
+            let track = Arc::new(track);
+            track.add_as_transceiver(&peer.pc).await?;
         }
 
         Ok(peer)
@@ -313,7 +313,7 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
         self.closed.load(Ordering::Acquire)
     }
 
-    pub async fn start_negotiation(&self, ice_restart: bool) {
+    pub async fn start_negotiation(&self, ice_restart: bool) -> Result<(), webrtc::Error> {
         let options = if ice_restart {
             Some(RTCOfferOptions {
                 voice_activity_detection: false, // Seems unused
@@ -322,9 +322,13 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
         } else {
             None
         };
-        if let Ok(offer) = self.pc.create_offer(options).await {
-            let _ = self.pc.set_local_description(offer.clone()).await;
-            let _ = self.signaler.send(Message::Sdp(offer)).await;
-        };
+
+        let offer = self.pc.create_offer(options).await?;
+        self.pc.set_local_description(offer.clone()).await?;
+        self.signaler
+            .send(Message::Sdp(offer))
+            .await
+            .map_err(|_| webrtc::Error::ErrUnknownType)?;
+        Ok(())
     }
 }

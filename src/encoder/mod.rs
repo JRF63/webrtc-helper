@@ -1,126 +1,59 @@
 mod track;
 
 pub use self::track::EncoderTrackLocal;
-use crate::{codecs::Codec, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
-use tokio::sync::mpsc::{error::TryRecvError, Receiver};
+use crate::{
+    codecs::{Codec, CodecType},
+    peer::IceConnectionState,
+    util::data_rate::TwccBandwidthEstimate,
+};
+use std::sync::Arc;
 use webrtc::{
-    ice_transport::ice_connection_state::RTCIceConnectionState,
-    rtp::packet::Packet,
-    rtp_transceiver::rtp_codec::RTCRtpCodecParameters,
-    track::track_local::{
-        track_local_static_rtp::TrackLocalStaticRTP, TrackLocal, TrackLocalContext,
-        TrackLocalWriter,
+    rtp_transceiver::{
+        rtp_codec::RTCRtpCodecCapability, RTCRtpTransceiver,
     },
+    track::track_local::{track_local_static_rtp::TrackLocalStaticRTP},
 };
 
-pub enum TrackLocalEvent {
-    Bind(TrackLocalContext),
-    Unbind(TrackLocalContext),
-}
-
 pub trait EncoderBuilder: Send {
-    // Unique identifier for the track. Used in the `TrackLocal` implementation.
+    /// Unique identifier for the track. Used in the `TrackLocal` implementation.
     fn id(&self) -> &str;
 
-    // Group this track belongs to. Used in the `TrackLocal` implementation.
+    /// Group this track belongs to. Used in the `TrackLocal` implementation.
     fn stream_id(&self) -> &str;
+
+    /// Whether the builder is for an audio or video codec.
+    /// 
+    /// This is required because webrtc-rs rejects the transceiver if 
+    /// [RTPCodecType::Unspecified][a] is returned by [TrackLocal::kind][b].
+    /// 
+    /// [a]: webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Unspecified
+    /// [b]: webrtc::track::track_local::TrackLocal::kind
+    fn codec_type(&self) -> CodecType;
 
     /// List of codecs that the encoder supports.
     fn supported_codecs(&self) -> &[Codec];
 
-    /// Build an encoder given the codec parameters.
-    // TODO: Maybe use Option<Box<dyn Encoder>> to allow for error reporting?
+    /// Build an encoder given the codec parameters. This function will be invoked inside a
+    /// Tokio runtime such that implementations could assume that `tokio::runtime::Handle` would
+    /// not panic.
     fn build(
         self: Box<Self>,
-        codec_params: &RTCRtpCodecParameters,
-        context: &TrackLocalContext,
+        rtp_track: Arc<TrackLocalStaticRTP>,
+        transceiver: Arc<RTCRtpTransceiver>,
+        ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
-    ) -> Box<dyn Encoder>;
+        codec_capability: RTCRtpCodecCapability,
+        ssrc: u32,
+        payload_type: u8,
+    );
 
     /// Checks if the encoder supports the given codec parameters.
-    fn is_codec_supported(&self, codec_params: &RTCRtpCodecParameters) -> bool {
+    fn is_codec_supported(&self, codec_capability: &RTCRtpCodecCapability) -> bool {
         for supported_codec in self.supported_codecs() {
-            if supported_codec.capability_matches(codec_params) {
+            if supported_codec.capability_matches(codec_capability) {
                 return true;
             }
         }
         false
     }
-}
-
-pub trait Encoder: Send {
-    /// Return the `Packets` for the current frame. This function is allowed to block.
-    fn packets(&mut self) -> &[Packet];
-
-    fn start(
-        mut self: Box<Self>,
-        mut receiver: Receiver<TrackLocalEvent>,
-        rtp_track: TrackLocalStaticRTP,
-        mut ice_connection_state: IceConnectionState,
-    ) where
-        // TODO: Why 'static??
-        Self: 'static,
-    {
-        // Spawn a dedicated thread for the encoder since its calls may block.
-        std::thread::spawn(move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(async move {
-                    // Wait for connection before sending data
-                    while *ice_connection_state.borrow() != RTCIceConnectionState::Connected {
-                        if let Err(_) = ice_connection_state.changed().await {
-                            // Sender closed
-                            return;
-                        }
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-
-                    // TODO: Check if the calls to `packets` and `set_data_rate` passes through a v-table.
-                    loop {
-                        match receiver.try_recv() {
-                            Ok(event) => {
-                                // TODO: log error
-                                if process_track_local_event(&rtp_track, event).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Err(TryRecvError::Empty) => {
-                                // `Encoder::start` is called inside `EncoderTrackLocal::bind` with
-                                // `Bind` already passed as the first event. This means that
-                                // `rtp_track` will be `bind`ed beforehand in the first branch of
-                                // this map and its `write_rtp` method should succeed.
-
-                                for packet in self.packets().iter() {
-                                    // TODO: Random errors here
-                                    if let Err(_err) = rtp_track.write_rtp(packet).await {
-                                        // TODO: log error
-                                    }
-                                }
-                            }
-                            Err(TryRecvError::Disconnected) => {
-                                // Sender closed; exit out of loop
-                                break;
-                            }
-                        }
-                    }
-                })
-        });
-    }
-}
-
-async fn process_track_local_event(
-    rtp_track: &TrackLocalStaticRTP,
-    event: TrackLocalEvent,
-) -> webrtc::error::Result<()> {
-    match event {
-        TrackLocalEvent::Bind(t) => {
-            rtp_track.bind(&t).await?;
-        }
-        TrackLocalEvent::Unbind(t) => {
-            rtp_track.unbind(&t).await?;
-        }
-    }
-    Ok(())
 }

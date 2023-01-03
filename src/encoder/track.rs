@@ -1,31 +1,28 @@
-use super::{EncoderBuilder, TrackLocalEvent};
-use crate::{codecs::CodecType, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
+use super::EncoderBuilder;
+use crate::{codecs::Codec, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
 use async_trait::async_trait;
-use std::any::Any;
+use std::{any::Any, fmt::Debug, sync::Arc};
 use tokio::sync::{
-    mpsc::{channel, Sender},
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     Mutex,
 };
 use webrtc::{
-    error::Result,
-    rtp_transceiver::rtp_codec::{RTCRtpCodecParameters, RTPCodecType},
+    peer_connection::RTCPeerConnection,
+    rtp_transceiver::{
+        rtp_codec::{RTCRtpCodecParameters, RTPCodecType},
+        rtp_transceiver_direction::RTCRtpTransceiverDirection,
+        RTCRtpTransceiver, RTCRtpTransceiverInit,
+    },
     track::track_local::{
         track_local_static_rtp::TrackLocalStaticRTP, TrackLocal, TrackLocalContext,
     },
     Error,
 };
 
-const CHANNEL_BUFFER_SIZE: usize = 4;
-
-enum TrackLocalData {
-    Builder(Box<dyn EncoderBuilder>),
-    Sender((RTCRtpCodecParameters, Sender<TrackLocalEvent>)),
-}
-
 pub struct EncoderTrackLocal {
-    data: Mutex<TrackLocalData>,
-    ice_connection_state: IceConnectionState,
-    bandwidth_estimate: TwccBandwidthEstimate,
+    tx: UnboundedSender<TrackLocalEvent>,
+    rtp_track: Mutex<Option<Arc<TrackLocalStaticRTP>>>,
+    supported_codecs: Vec<Codec>,
     id: String,
     stream_id: String,
     kind: RTPCodecType,
@@ -33,62 +30,43 @@ pub struct EncoderTrackLocal {
 
 #[async_trait]
 impl TrackLocal for EncoderTrackLocal {
-    async fn bind(&self, t: &TrackLocalContext) -> Result<RTCRtpCodecParameters> {
-        let mut data = self.data.lock().await;
-
+    async fn bind(&self, t: &TrackLocalContext) -> Result<RTCRtpCodecParameters, webrtc::Error> {
+        let mut data = self.rtp_track.lock().await;
         match &mut *data {
-            TrackLocalData::Builder(builder) => {
-                for codec in t.codec_parameters() {
-                    if builder.is_codec_supported(codec) {
-                        let (tx, rx) = channel(CHANNEL_BUFFER_SIZE);
+            Some(rtp_track) => rtp_track.bind(t).await,
+            None => {
+                for codec_params in t.codec_parameters() {
+                    for codec in &self.supported_codecs {
+                        if codec.capability_matches(&codec_params.capability) {
+                            let rtp_track = Arc::new(TrackLocalStaticRTP::new(
+                                codec_params.capability.clone(),
+                                self.id.clone(),
+                                self.stream_id.clone(),
+                            ));
 
-                        let rtp_track = TrackLocalStaticRTP::new(
-                            codec.capability.clone(),
-                            self.id.clone(),
-                            self.stream_id.clone(),
-                        );
+                            let rtp_params = (t.ssrc(), codec_params.payload_type);
+                            self.tx
+                                .send(TrackLocalEvent::RtpTrack(rtp_track.clone(), rtp_params))
+                                .expect("Error while sending TrackLocalStaticRTP");
 
-                        let send_success = tx.send(TrackLocalEvent::Bind(t.clone())).await.is_ok();
+                            let bind_result = rtp_track.bind(t).await;
+                            let mut new_data = Some(rtp_track);
+                            std::mem::swap(&mut *data, &mut new_data);
 
-                        if !send_success {
-                            return Err(Error::ErrUnsupportedCodec);
+                            return bind_result;
                         }
-
-                        let mut sender = TrackLocalData::Sender((codec.clone(), tx));
-
-                        std::mem::swap(&mut *data, &mut sender);
-
-                        if let TrackLocalData::Builder(builder) = sender {
-                            let encoder = builder.build(codec, t, self.bandwidth_estimate.clone());
-                            encoder.start(rx, rtp_track, self.ice_connection_state.clone());
-                        }
-
-                        return Ok(codec.clone());
                     }
                 }
                 Err(Error::ErrUnsupportedCodec)
             }
-            TrackLocalData::Sender((codec, sender)) => {
-                match sender.send(TrackLocalEvent::Bind(t.clone())).await {
-                    Ok(_) => Ok(codec.clone()),
-                    Err(_) => Err(Error::ErrUnsupportedCodec),
-                }
-            }
         }
     }
 
-    async fn unbind(&self, t: &TrackLocalContext) -> Result<()> {
-        let mut data = self.data.lock().await;
-        if let TrackLocalData::Sender((_, sender)) = &mut *data {
-            if sender
-                .send(TrackLocalEvent::Unbind(t.clone()))
-                .await
-                .is_ok()
-            {
-                return Ok(());
-            }
+    async fn unbind(&self, t: &TrackLocalContext) -> Result<(), webrtc::Error> {
+        match &mut *self.rtp_track.lock().await {
+            Some(rtp_track) => rtp_track.unbind(t).await,
+            None => Err(Error::ErrUnbindFailed),
         }
-        Err(Error::ErrUnbindFailed)
     }
 
     fn id(&self) -> &str {
@@ -109,39 +87,115 @@ impl TrackLocal for EncoderTrackLocal {
 }
 
 impl EncoderTrackLocal {
-    pub fn new(
+    pub async fn new(
         encoder_builder: Box<dyn EncoderBuilder>,
         ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
-    ) -> Option<EncoderTrackLocal> {
-        let codecs = encoder_builder.supported_codecs();
-
-        let mut audio = 0;
-        let mut video = 0;
-        for codec in codecs.iter() {
-            match codec.codec_type() {
-                CodecType::Audio => audio += 1,
-                CodecType::Video => video += 1,
-            }
-        }
-
-        let kind = match (audio, video) {
-            (0, 0) => return None,
-            (_, 0) => RTPCodecType::Audio,
-            (0, _) => RTPCodecType::Video,
-            _ => return None,
-        };
-
+    ) -> EncoderTrackLocal {
         let id = encoder_builder.id().to_owned();
         let stream_id = encoder_builder.stream_id().to_owned();
+        let kind = encoder_builder.codec_type().into();
+        let supported_codecs = encoder_builder.supported_codecs().to_vec();
 
-        Some(EncoderTrackLocal {
-            data: Mutex::new(TrackLocalData::Builder(encoder_builder)),
-            ice_connection_state,
-            bandwidth_estimate,
+        let (tx, rx) = unbounded_channel();
+
+        tokio::spawn(async move {
+            pending_builder(
+                rx,
+                encoder_builder,
+                ice_connection_state,
+                bandwidth_estimate,
+            )
+            .await;
+        });
+
+        EncoderTrackLocal {
+            tx,
+            rtp_track: Mutex::new(None),
+            supported_codecs,
             id,
             stream_id,
             kind,
-        })
+        }
+    }
+
+    pub async fn add_as_transceiver(
+        self: Arc<EncoderTrackLocal>,
+        pc: &RTCPeerConnection,
+    ) -> Result<(), webrtc::Error> {
+        let transceiver = pc
+            .add_transceiver_from_track(
+                self.clone(),
+                &[RTCRtpTransceiverInit {
+                    direction: RTCRtpTransceiverDirection::Sendonly,
+                    send_encodings: Vec::new(),
+                }],
+            )
+            .await?;
+        self.tx
+            .send(TrackLocalEvent::RtpTransceiver(transceiver))
+            .expect("Error while sending RTCRtpTransceiver");
+        Ok(())
+    }
+}
+
+enum TrackLocalEvent {
+    RtpTrack(Arc<TrackLocalStaticRTP>, (u32, u8)),
+    RtpTransceiver(Arc<RTCRtpTransceiver>),
+}
+
+impl Debug for TrackLocalEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RtpTrack(arg0, arg1) => {
+                f.debug_tuple("RtpTrack").field(arg0).field(arg1).finish()
+            }
+            Self::RtpTransceiver(_) => f.debug_tuple("RtpTransceiver").finish(),
+        }
+    }
+}
+
+async fn pending_builder(
+    mut rx: UnboundedReceiver<TrackLocalEvent>,
+    encoder_builder: Box<dyn EncoderBuilder>,
+    ice_connection_state: IceConnectionState,
+    bandwidth_estimate: TwccBandwidthEstimate,
+) {
+    let mut rtp_track: Option<Arc<TrackLocalStaticRTP>> = None;
+    let mut transceiver: Option<Arc<RTCRtpTransceiver>> = None;
+    let mut rtp_params: Option<(u32, u8)> = None;
+
+    loop {
+        if rtp_track.is_some() && transceiver.is_some() && rtp_params.is_some() {
+            let rtp_track = rtp_track.unwrap();
+            let codec_capability = rtp_track.codec();
+            let transceiver = transceiver.unwrap();
+            let (ssrc, payload_type) = rtp_params.unwrap();
+
+            encoder_builder.build(
+                rtp_track,
+                transceiver,
+                ice_connection_state,
+                bandwidth_estimate,
+                codec_capability,
+                ssrc,
+                payload_type,
+            );
+            break;
+        } else {
+            match rx.recv().await {
+                Some(event) => match event {
+                    TrackLocalEvent::RtpTrack(t, p) => {
+                        rtp_track = Some(t);
+                        rtp_params = Some(p);
+                    }
+                    TrackLocalEvent::RtpTransceiver(r) => transceiver = Some(r),
+                },
+                None => {
+                    // TODO: Log error
+                    break;
+                }
+            }
+        }
     }
 }
