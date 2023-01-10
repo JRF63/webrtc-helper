@@ -22,7 +22,7 @@ use webrtc::{
     interceptor::registry::Registry,
     peer_connection::{
         configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
-        sdp::sdp_type::RTCSdpType, RTCPeerConnection,
+        sdp::sdp_type::RTCSdpType, signaling_state::RTCSignalingState, RTCPeerConnection,
     },
     rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
@@ -266,12 +266,20 @@ where
         Ok(())
     }
 
+    // Implements the impolite peer of "perfect negotiation".
     async fn handle_signaler_message(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
         while !peer.is_closed() {
             if let Ok(msg) = peer.signaler.recv().await {
                 match msg {
                     Message::Sdp(sdp) => {
                         let sdp_type = sdp.sdp_type;
+
+                        if sdp_type == RTCSdpType::Offer
+                            && peer.pc.signaling_state() != RTCSignalingState::Stable
+                        {
+                            continue;
+                        }
+
                         peer.pc.set_remote_description(sdp).await?;
                         if sdp_type == RTCSdpType::Offer {
                             let answer = peer.pc.create_answer(None).await?;
