@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch, Mutex, Notify};
 use webrtc::{
     api::{
         interceptor_registry::{configure_nack, configure_rtcp_reports},
@@ -126,7 +126,7 @@ where
                 })
                 .await?,
             signaler: self.signaler,
-            closed: AtomicBool::new(false),
+            closed: Notify::new(),
         });
 
         match self.role {
@@ -268,7 +268,7 @@ where
 
     // Implements the impolite peer of "perfect negotiation".
     async fn handle_signaler_message(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
-        while !peer.is_closed() {
+        loop {
             if let Ok(msg) = peer.signaler.recv().await {
                 match msg {
                     Message::Sdp(sdp) => {
@@ -304,7 +304,7 @@ where
 pub struct WebRtcPeer<S: Signaler + 'static> {
     pc: RTCPeerConnection,
     signaler: S,
-    closed: AtomicBool,
+    closed: Notify,
 }
 
 impl<S: Signaler + 'static> WebRtcPeer<S> {
@@ -314,11 +314,11 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
 
     pub async fn close(&self) {
         let _ = self.signaler.send(Message::Bye).await;
-        self.closed.store(true, Ordering::Release);
+        self.closed.notify_waiters();
     }
 
-    pub fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
+    pub async fn is_closed(&self) {
+        self.closed.notified().await;
     }
 
     pub async fn start_negotiation(&self, ice_restart: bool) -> Result<(), webrtc::Error> {
