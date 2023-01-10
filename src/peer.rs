@@ -5,10 +5,7 @@ use crate::{
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
 };
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 use tokio::sync::{watch, Mutex, Notify};
 use webrtc::{
     api::{
