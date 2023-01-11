@@ -19,7 +19,8 @@ use webrtc::{
     interceptor::registry::Registry,
     peer_connection::{
         configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
-        sdp::sdp_type::RTCSdpType, signaling_state::RTCSignalingState, RTCPeerConnection,
+        sdp::sdp_type::RTCSdpType, signaling_state::RTCSignalingState, OnDataChannelHdlrFn,
+        RTCPeerConnection,
     },
     rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
@@ -48,6 +49,7 @@ where
     role: Role,
     encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
+    data_channel_handler: Option<OnDataChannelHdlrFn>,
     ice_servers: Vec<RTCIceServer>,
 }
 
@@ -55,31 +57,46 @@ impl<S> WebRtcBuilder<S>
 where
     S: Signaler + 'static,
 {
+    /// Create a new `WebRtcBuilder`.
     pub fn new(signaler: S, role: Role) -> Self {
         WebRtcBuilder {
             signaler,
             role,
             encoders: Vec::new(),
             decoders: Vec::new(),
+            data_channel_handler: None,
             ice_servers: Vec::new(),
         }
     }
 
+    /// Add an encoder.
     pub fn with_encoder(&mut self, encoder: Box<dyn EncoderBuilder>) -> &mut Self {
         self.encoders.push(encoder);
         self
     }
 
+    /// Add a decoder.
     pub fn with_decoder(&mut self, decoder: Box<dyn DecoderBuilder>) -> &mut Self {
         self.decoders.push(decoder);
         self
     }
 
-    pub fn with_ice_server(&mut self, ice_server: RTCIceServer) -> &mut Self {
-        self.ice_servers.push(ice_server);
+    /// Add a callback for sending/receiving data through a [RTCDataChannel][dc].
+    /// 
+    /// [dc]: webrtc::data_channel::RTCDataChannel
+    pub fn with_data_channel_handler(&mut self, data_channel_handler: OnDataChannelHdlrFn) -> &mut Self {
+        self.data_channel_handler = Some(data_channel_handler);
         self
     }
 
+    /// Build using the give ICE servers.
+    pub fn with_ice_servers(&mut self, ice_servers: &[RTCIceServer]) -> &mut Self {
+        self.ice_servers.clear();
+        self.ice_servers.extend_from_slice(ice_servers);
+        self
+    }
+
+    /// Consume the builder and build a `WebRtcPeer`.
     pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer<S>>> {
         let mut media_engine = MediaEngine::default();
         {
@@ -99,6 +116,7 @@ where
         let (registry, bandwidth_estimate) = configure_custom_twcc(registry, &mut media_engine)?;
 
         let mut setting_engine = SettingEngine::default();
+        setting_engine.detach_data_channels();
 
         // Leave mDNS disabled on debug builds because webrtc-rs does not handle it properly when
         // communicating with another webrtc-rs instance
@@ -217,6 +235,18 @@ where
                     .await;
             let track = Arc::new(track);
             track.add_as_transceiver(&peer.pc).await?;
+        }
+
+        if let Some(mut data_channel_handler) = self.data_channel_handler {
+            match self.role {
+                Role::Offerer => {
+                    let data_channel = peer.pc.create_data_channel("channel", None).await?;
+                    (data_channel_handler)(data_channel).await;
+                }
+                Role::Answerer => {
+                    peer.pc.on_data_channel(data_channel_handler);
+                }
+            }
         }
 
         Ok(peer)
