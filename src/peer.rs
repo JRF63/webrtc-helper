@@ -5,7 +5,7 @@ use crate::{
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
 };
-use std::sync::Arc;
+use std::{future::Future, sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex, Notify};
 use webrtc::{
     api::{
@@ -20,7 +20,7 @@ use webrtc::{
     peer_connection::{
         configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
         sdp::sdp_type::RTCSdpType, signaling_state::RTCSignalingState, OnDataChannelHdlrFn,
-        RTCPeerConnection,
+        RTCPeerConnection, peer_connection_state::RTCPeerConnectionState,
     },
     rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
@@ -47,10 +47,11 @@ where
 {
     signaler: S,
     role: Role,
+    ice_servers: Vec<RTCIceServer>,
     encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
     data_channel_handler: Option<OnDataChannelHdlrFn>,
-    ice_servers: Vec<RTCIceServer>,
+    close_signal: Option<Box<dyn Future<Output = ()> + Send + 'static>>,
 }
 
 impl<S> WebRtcBuilder<S>
@@ -62,10 +63,11 @@ where
         WebRtcBuilder {
             signaler,
             role,
+            ice_servers: Vec::new(),
             encoders: Vec::new(),
             decoders: Vec::new(),
             data_channel_handler: None,
-            ice_servers: Vec::new(),
+            close_signal: None,
         }
     }
 
@@ -81,18 +83,30 @@ where
         self
     }
 
-    /// Add a callback for sending/receiving data through a [RTCDataChannel][dc].
-    /// 
-    /// [dc]: webrtc::data_channel::RTCDataChannel
-    pub fn with_data_channel_handler(&mut self, data_channel_handler: OnDataChannelHdlrFn) -> &mut Self {
-        self.data_channel_handler = Some(data_channel_handler);
-        self
-    }
-
     /// Build using the give ICE servers.
     pub fn with_ice_servers(&mut self, ice_servers: &[RTCIceServer]) -> &mut Self {
         self.ice_servers.clear();
         self.ice_servers.extend_from_slice(ice_servers);
+        self
+    }
+
+    /// Add a callback for sending/receiving data through a [RTCDataChannel][dc].
+    ///
+    /// [dc]: webrtc::data_channel::RTCDataChannel
+    pub fn with_data_channel_handler(
+        &mut self,
+        data_channel_handler: OnDataChannelHdlrFn,
+    ) -> &mut Self {
+        self.data_channel_handler = Some(data_channel_handler);
+        self
+    }
+
+    /// Add a callback that will cause the WebRtcPeer to close when its [Future] resolves.
+    pub fn with_close_signal(
+        &mut self,
+        close_signal: Box<dyn Future<Output = ()> + Send + 'static>,
+    ) -> &mut Self {
+        self.close_signal = Some(close_signal);
         self
     }
 
@@ -117,6 +131,9 @@ where
 
         let mut setting_engine = SettingEngine::default();
         setting_engine.detach_data_channels();
+
+        // Default is too long
+        setting_engine.set_ice_timeouts(None, Some(Duration::from_secs(10)), None);
 
         // Leave mDNS disabled on debug builds because webrtc-rs does not handle it properly when
         // communicating with another webrtc-rs instance
@@ -196,6 +213,20 @@ where
                 })
             }));
 
+        // Signal close when peer connection fails
+        let weak_ref = Arc::downgrade(&peer);
+        peer.pc
+            .on_peer_connection_state_change(Box::new(move |state| {
+                let peer = weak_ref.clone();
+                Box::pin(async move {
+                    if state == RTCPeerConnectionState::Failed {
+                        if let Some(peer) = peer.upgrade() {
+                            peer.close().await;
+                        }
+                    }
+                })
+            }));
+
         let peer_clone = peer.clone();
         tokio::spawn(async move {
             if let Err(e) = Self::handle_signaler_message(peer_clone).await {
@@ -247,6 +278,10 @@ where
                     peer.pc.on_data_channel(data_channel_handler);
                 }
             }
+        }
+
+        if let Some(close_signal) = self.close_signal {
+            tokio::spawn(Self::wait_for_close(peer.clone(), close_signal));
         }
 
         Ok(peer)
@@ -325,6 +360,14 @@ where
             }
         }
         Ok(())
+    }
+
+    async fn wait_for_close(
+        peer: Arc<WebRtcPeer<S>>,
+        close_signal: Box<dyn Future<Output = ()> + Send + 'static>,
+    ) {
+        Box::into_pin(close_signal).await;
+        peer.close().await;
     }
 }
 
