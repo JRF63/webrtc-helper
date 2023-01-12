@@ -15,8 +15,10 @@ pub enum Message {
 
 #[async_trait]
 pub trait Signaler: Send + Sync {
-    async fn recv(&self) -> std::io::Result<Message>;
-    async fn send(&self, msg: Message) -> std::io::Result<()>;
+    type Error: Send + std::fmt::Display;
+
+    async fn recv(&self) -> Result<Message, Self::Error>;
+    async fn send(&self, msg: Message) -> Result<(), Self::Error>;
 }
 
 #[cfg(test)]
