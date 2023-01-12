@@ -9,13 +9,15 @@ pub struct MockSignaler {
 
 #[async_trait]
 impl Signaler for MockSignaler {
-    async fn recv(&self) -> std::io::Result<Message> {
+    type Error = std::io::Error;
+
+    async fn recv(&self) -> Result<Message, Self::Error> {
         let mut lock = self.rx.lock().await;
         let msg = lock.recv().await;
         msg.ok_or(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
     }
 
-    async fn send(&self, msg: Message) -> std::io::Result<()> {
+    async fn send(&self, msg: Message) -> Result<(), Self::Error> {
         self.tx.send(msg).map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
     }
 }
