@@ -14,6 +14,7 @@ use webrtc::{
     track::track_local::{track_local_static_rtp::TrackLocalStaticRTP},
 };
 
+/// Encapsulates a builder that produces an encoder.
 pub trait EncoderBuilder: Send {
     /// Unique identifier for the track. Used in the `TrackLocal` implementation.
     fn id(&self) -> &str;
@@ -36,6 +37,11 @@ pub trait EncoderBuilder: Send {
     /// Build an encoder given the codec parameters. This function will be invoked inside a
     /// Tokio runtime such that implementations could assume that `tokio::runtime::Handle` would
     /// not panic.
+    /// 
+    /// Encoded samples are to be sent through the `RTCRtpTransceiver`.
+    /// 
+    /// Implementations need to wait for ICE to be connected via `ice_connection_state` before
+    /// sending data. The chosen codec is found through `codec_capability`.
     fn build(
         self: Box<Self>,
         rtp_track: Arc<TrackLocalStaticRTP>,
