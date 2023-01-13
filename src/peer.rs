@@ -5,7 +5,7 @@ use crate::{
     interceptor::configure_custom_twcc,
     signaling::{Message, Signaler},
 };
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex, Notify};
 use webrtc::{
     api::{
@@ -19,8 +19,8 @@ use webrtc::{
     interceptor::registry::Registry,
     peer_connection::{
         configuration::RTCConfiguration, offer_answer_options::RTCOfferOptions,
-        sdp::sdp_type::RTCSdpType, signaling_state::RTCSignalingState, OnDataChannelHdlrFn,
-        RTCPeerConnection, peer_connection_state::RTCPeerConnectionState,
+        peer_connection_state::RTCPeerConnectionState, sdp::sdp_type::RTCSdpType,
+        signaling_state::RTCSignalingState, OnDataChannelHdlrFn, RTCPeerConnection,
     },
     rtp_transceiver::rtp_receiver::RTCRtpReceiver,
     track::track_remote::TrackRemote,
@@ -41,6 +41,7 @@ pub enum Role {
     Answerer,
 }
 
+/// Builder for a `WebRtcPeer`.
 pub struct WebRtcBuilder<S>
 where
     S: Signaler + 'static,
@@ -51,7 +52,6 @@ where
     encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
     data_channel_handler: Option<OnDataChannelHdlrFn>,
-    close_signal: Option<Box<dyn Future<Output = ()> + Send + 'static>>,
 }
 
 impl<S> WebRtcBuilder<S>
@@ -67,7 +67,6 @@ where
             encoders: Vec::new(),
             decoders: Vec::new(),
             data_channel_handler: None,
-            close_signal: None,
         }
     }
 
@@ -83,7 +82,7 @@ where
         self
     }
 
-    /// Build using the give ICE servers.
+    /// Build using the given ICE servers.
     pub fn with_ice_servers(&mut self, ice_servers: &[RTCIceServer]) -> &mut Self {
         self.ice_servers.clear();
         self.ice_servers.extend_from_slice(ice_servers);
@@ -98,15 +97,6 @@ where
         data_channel_handler: OnDataChannelHdlrFn,
     ) -> &mut Self {
         self.data_channel_handler = Some(data_channel_handler);
-        self
-    }
-
-    /// Add a callback that will cause the WebRtcPeer to close when its [Future] resolves.
-    pub fn with_close_signal(
-        &mut self,
-        close_signal: Box<dyn Future<Output = ()> + Send + 'static>,
-    ) -> &mut Self {
-        self.close_signal = Some(close_signal);
         self
     }
 
@@ -161,6 +151,7 @@ where
             closed: Notify::new(),
         });
 
+        // Start the WebRTC negotiation if configured to be the offerer
         match self.role {
             Role::Offerer => {
                 let weak_ref = Arc::downgrade(&peer);
@@ -178,6 +169,7 @@ where
             Role::Answerer => (),
         }
 
+        // Sends the ICE candidate to the peer via the signaling channel
         let weak_ref = Arc::downgrade(&peer);
         peer.pc.on_ice_candidate(Box::new(move |candidate| {
             let peer = weak_ref.clone();
@@ -190,6 +182,8 @@ where
             })
         }));
 
+        // Monitors the ICE connection state and sends it to the encoders. Also initiates an ICE
+        // restart when the connection fails.
         let (ice_tx, ice_rx) = watch::channel(RTCIceConnectionState::default());
         let weak_ref = Arc::downgrade(&peer);
         peer.pc
@@ -213,7 +207,7 @@ where
                 })
             }));
 
-        // Signal close when peer connection fails
+        // Close when peer connection fails
         let weak_ref = Arc::downgrade(&peer);
         peer.pc
             .on_peer_connection_state_change(Box::new(move |state| {
@@ -227,22 +221,21 @@ where
                 })
             }));
 
-        let peer_clone = peer.clone();
-        tokio::spawn(async move {
-            if let Err(e) = Self::handle_signaler_message(peer_clone).await {
-                panic!("{e}");
-            }
-        });
+        // Spawn a task to concurrently handle the messages received from the signaling channel
+        tokio::spawn(Self::signaler_message_handler(peer.clone()));
 
+        // Handle the received track using one of the decoders
         let decoders = Arc::new(Mutex::new(self.decoders));
         peer.pc.on_track(Box::new(
             move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
-                let (Some(track), Some(receiver)) = (track, receiver) else {
-                        return Box::pin(async move {});
-                    };
+                let (track, receiver) = match (track, receiver) {
+                    (Some(t), Some(r)) => (t, r),
+                    _ => return Box::pin(async {}),
+                };
 
                 let decoders = decoders.clone();
 
+                // Pick one decoder that can handle the codec of the track
                 Box::pin(async move {
                     let codec = track.codec().await;
                     let mut decoders = decoders.lock().await;
@@ -250,6 +243,7 @@ where
                     for (index, decoder) in decoders.iter().enumerate() {
                         if decoder.is_codec_supported(&codec.capability) {
                             matched_index = Some(index);
+                            break;
                         }
                     }
                     if let Some(index) = matched_index {
@@ -278,10 +272,6 @@ where
                     peer.pc.on_data_channel(data_channel_handler);
                 }
             }
-        }
-
-        if let Some(close_signal) = self.close_signal {
-            tokio::spawn(Self::wait_for_close(peer.clone(), close_signal));
         }
 
         Ok(peer)
@@ -329,7 +319,7 @@ where
     }
 
     // Implements the impolite peer of "perfect negotiation".
-    async fn handle_signaler_message(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
+    async fn signaler_message_handler(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
         loop {
             if let Ok(msg) = peer.signaler.recv().await {
                 match msg {
@@ -361,16 +351,12 @@ where
         }
         Ok(())
     }
-
-    async fn wait_for_close(
-        peer: Arc<WebRtcPeer<S>>,
-        close_signal: Box<dyn Future<Output = ()> + Send + 'static>,
-    ) {
-        Box::into_pin(close_signal).await;
-        peer.close().await;
-    }
 }
 
+/// Struct representing a WebRTC connection.
+/// 
+/// Usage is through passing `EncoderBuilder`, `DecoderBuilder` and `OnDataChannelHdlrFn` to the
+/// builder.
 pub struct WebRtcPeer<S: Signaler + 'static> {
     pc: RTCPeerConnection,
     signaler: S,
@@ -378,20 +364,24 @@ pub struct WebRtcPeer<S: Signaler + 'static> {
 }
 
 impl<S: Signaler + 'static> WebRtcPeer<S> {
+    /// Returns a builder for a `WebRtcPeer`. The signaling channel implementation and the role
+    /// of the peer needs to be both supplied. 
     pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
         WebRtcBuilder::new(signaler, role)
     }
 
+    /// Close the `WebRtcPeer`.
     pub async fn close(&self) {
         let _ = self.signaler.send(Message::Bye).await;
         self.closed.notify_waiters();
     }
 
+    /// Blocks until the `WebRtcPeer` has been closed.
     pub async fn is_closed(&self) {
         self.closed.notified().await;
     }
 
-    pub async fn start_negotiation(&self, ice_restart: bool) -> Result<(), webrtc::Error> {
+    async fn start_negotiation(&self, ice_restart: bool) -> Result<(), webrtc::Error> {
         let options = if ice_restart {
             Some(RTCOfferOptions {
                 voice_activity_detection: false, // Seems unused

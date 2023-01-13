@@ -5,6 +5,7 @@ use webrtc::{
     peer_connection::sdp::session_description::RTCSessionDescription,
 };
 
+/// The kinds of messages sent/received through the signaling channel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum Message {
@@ -13,11 +14,15 @@ pub enum Message {
     Bye,
 }
 
+/// Trait that encapsulates the WebRTC's notion of a signaling channel.
 #[async_trait]
 pub trait Signaler: Send + Sync {
     type Error: Send + std::fmt::Display;
 
+    /// Blocks until a message is received.
     async fn recv(&self) -> Result<Message, Self::Error>;
+
+    /// Send a message through the channel.
     async fn send(&self, msg: Message) -> Result<(), Self::Error>;
 }
 

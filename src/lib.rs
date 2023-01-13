@@ -9,4 +9,10 @@ pub mod util;
 #[cfg(test)]
 mod mock;
 
-pub use peer::{WebRtcPeer, WebRtcBuilder};
+pub use self::{
+    codecs::Codec,
+    decoder::DecoderBuilder,
+    encoder::EncoderBuilder,
+    peer::{WebRtcBuilder, WebRtcPeer},
+    signaling::{Message, Signaler},
+};
