@@ -2,14 +2,18 @@ use crate::{
     codecs::{Codec, MediaEngineExt},
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
-    interceptor::configure_custom_twcc,
+    interceptor::{configure_custom_twcc_sender, twcc::TwccBandwidthEstimate},
     signaling::{Message, Signaler},
+    util::data_rate::DataRate,
 };
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex, Notify};
 use webrtc::{
     api::{
-        interceptor_registry::{configure_nack, configure_rtcp_reports},
+        interceptor_registry::{
+            configure_nack, configure_rtcp_reports, configure_twcc, configure_twcc_receiver_only,
+            configure_twcc_sender_only,
+        },
         media_engine::MediaEngine,
         setting_engine::SettingEngine,
         APIBuilder,
@@ -52,6 +56,7 @@ where
     encoders: Vec<Box<dyn EncoderBuilder>>,
     decoders: Vec<Box<dyn DecoderBuilder>>,
     data_channel_handler: Option<OnDataChannelHdlrFn>,
+    init_bandwidth: DataRate,
 }
 
 impl<S> WebRtcBuilder<S>
@@ -67,6 +72,7 @@ where
             encoders: Vec::new(),
             decoders: Vec::new(),
             data_channel_handler: None,
+            init_bandwidth: DataRate::from_bits_per_sec(1_000_000), // 1 Mbps
         }
     }
 
@@ -100,6 +106,11 @@ where
         self
     }
 
+    pub fn initial_bandwidth(&mut self, init_bandwidth: DataRate) -> &mut Self {
+        self.init_bandwidth = init_bandwidth;
+        self
+    }
+
     /// Consume the builder and build a `WebRtcPeer`.
     pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer<S>>> {
         let mut media_engine = MediaEngine::default();
@@ -117,7 +128,14 @@ where
 
         let registry = configure_nack(Registry::new(), &mut media_engine);
         let registry = configure_rtcp_reports(registry);
-        let (registry, bandwidth_estimate) = configure_custom_twcc(registry, &mut media_engine)?;
+
+        let (registry, bandwidth_estimate) = Self::init_twcc(
+            registry,
+            &mut media_engine,
+            self.init_bandwidth,
+            self.encoders.len() > 0,
+            self.decoders.len() > 0,
+        )?;
 
         let mut setting_engine = SettingEngine::default();
         setting_engine.detach_data_channels();
@@ -255,11 +273,16 @@ where
         ));
 
         for encoder_builder in self.encoders {
-            let track =
-                EncoderTrackLocal::new(encoder_builder, ice_rx.clone(), bandwidth_estimate.clone())
-                    .await;
-            let track = Arc::new(track);
-            track.add_as_transceiver(&peer.pc).await?;
+            if let Some(bandwidth_estimate) = &bandwidth_estimate {
+                let track = EncoderTrackLocal::new(
+                    encoder_builder,
+                    ice_rx.clone(),
+                    bandwidth_estimate.clone(),
+                )
+                .await;
+                let track = Arc::new(track);
+                track.add_as_transceiver(&peer.pc).await?;
+            }
         }
 
         if let Some(mut data_channel_handler) = self.data_channel_handler {
@@ -351,10 +374,41 @@ where
         }
         Ok(())
     }
+
+    fn init_twcc(
+        registry: Registry,
+        media_engine: &mut MediaEngine,
+        init_bandwidth: DataRate,
+        has_encoder: bool,
+        has_decoder: bool,
+    ) -> Result<(Registry, Option<TwccBandwidthEstimate>), webrtc::Error> {
+        match (has_encoder, has_decoder) {
+            // Has both sender and receiver
+            (true, true) => {
+                let (registry, bandwidth_estimate) =
+                    configure_custom_twcc_sender(registry, init_bandwidth)?;
+                let registry = configure_twcc(registry, media_engine)?;
+                Ok((registry, Some(bandwidth_estimate)))
+            }
+            // Only sender
+            (true, false) => {
+                let (registry, bandwidth_estimate) =
+                    configure_custom_twcc_sender(registry, init_bandwidth)?;
+                let registry = configure_twcc_sender_only(registry, media_engine)?;
+                Ok((registry, Some(bandwidth_estimate)))
+            }
+            // Only receiver
+            (false, true) => {
+                let registry = configure_twcc_receiver_only(registry, media_engine)?;
+                Ok((registry, None))
+            }
+            (false, false) => Ok((registry, None)),
+        }
+    }
 }
 
 /// Struct representing a WebRTC connection.
-/// 
+///
 /// Usage is through passing `EncoderBuilder`, `DecoderBuilder` and `OnDataChannelHdlrFn` to the
 /// builder.
 pub struct WebRtcPeer<S: Signaler + 'static> {
@@ -365,7 +419,7 @@ pub struct WebRtcPeer<S: Signaler + 'static> {
 
 impl<S: Signaler + 'static> WebRtcPeer<S> {
     /// Returns a builder for a `WebRtcPeer`. The signaling channel implementation and the role
-    /// of the peer needs to be both supplied. 
+    /// of the peer needs to be both supplied.
     pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
         WebRtcBuilder::new(signaler, role)
     }

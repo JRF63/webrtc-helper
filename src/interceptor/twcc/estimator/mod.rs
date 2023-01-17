@@ -6,8 +6,8 @@ use webrtc::rtcp::transport_feedbacks::transport_layer_cc::{
 };
 
 use self::{delay_based::DelayBasedBandwidthEstimator, loss_based::LossBasedBandwidthEstimator};
-use super::{sync::TwccSendInfo, time::TwccTime};
-use crate::util::data_rate::{DataRate, TwccBandwidthSender};
+use super::{sync::TwccSendInfo, time::TwccTime, TwccBandwidthSender};
+use crate::util::data_rate::DataRate;
 use std::time::Instant;
 
 pub struct TwccBandwidthEstimator {

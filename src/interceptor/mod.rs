@@ -1,20 +1,15 @@
 pub mod twcc;
 
-use crate::util::data_rate::{twcc_bandwidth_estimate_channel, TwccBandwidthEstimate};
-use twcc::TwccInterceptorBuilder;
-use webrtc::{
-    api::{interceptor_registry::configure_twcc, media_engine::MediaEngine},
-    error::Result,
-    interceptor::registry::Registry,
-};
+use crate::util::data_rate::DataRate;
+use twcc::{twcc_bandwidth_estimate_channel, TwccBandwidthEstimate, TwccInterceptorBuilder};
+use webrtc::{error::Result, interceptor::registry::Registry};
 
-pub fn configure_custom_twcc(
+pub fn configure_custom_twcc_sender(
     mut registry: Registry,
-    media_engine: &mut MediaEngine,
+    init_bandwidth: DataRate,
 ) -> Result<(Registry, TwccBandwidthEstimate)> {
-    let (tx, rx) = twcc_bandwidth_estimate_channel();
+    let (tx, rx) = twcc_bandwidth_estimate_channel(init_bandwidth);
     let builder = TwccInterceptorBuilder::new(tx);
     registry.add(Box::new(builder));
-    let registry = configure_twcc(registry, media_engine)?;
     Ok((registry, rx))
 }

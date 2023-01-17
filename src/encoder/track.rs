@@ -1,5 +1,5 @@
 use super::EncoderBuilder;
-use crate::{codecs::Codec, peer::IceConnectionState, util::data_rate::TwccBandwidthEstimate};
+use crate::{codecs::Codec, interceptor::twcc::TwccBandwidthEstimate, peer::IceConnectionState};
 use async_trait::async_trait;
 use std::{any::Any, fmt::Debug, sync::Arc};
 use tokio::sync::{

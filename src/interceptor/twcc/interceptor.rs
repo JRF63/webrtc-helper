@@ -1,7 +1,6 @@
 use super::{
-    estimator::TwccBandwidthEstimator, sender::TwccTimestampSenderStream, sync::TwccSendInfo,
+    estimator::TwccBandwidthEstimator, sender::TwccTimestampSenderStream, sync::TwccSendInfo, TwccBandwidthSender
 };
-use crate::util::data_rate::TwccBandwidthSender;
 use async_trait::async_trait;
 use std::{
     sync::Arc,

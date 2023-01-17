@@ -1,8 +1,9 @@
 use crate::{
     codecs::{Codec, CodecType},
     encoder::EncoderBuilder,
+    interceptor::twcc::TwccBandwidthEstimate,
     peer::IceConnectionState,
-    util::data_rate::{DataRate, TwccBandwidthEstimate},
+    util::data_rate::DataRate,
 };
 use bytes::Bytes;
 use std::{
