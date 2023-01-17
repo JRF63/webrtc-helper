@@ -304,7 +304,7 @@ where
         codecs: Vec<Codec>,
         media_engine: &mut MediaEngine,
     ) -> Result<(), webrtc::Error> {
-        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
+        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 128u8;
 
         let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
 
@@ -336,6 +336,15 @@ where
             media_engine.register_custom_codec(ulpfec)?;
         } else {
             panic!("Not enough payload type for ULPFEC");
+        }
+
+        if let Some(payload_type) = payload_id {
+            // Required for the browser to send TWCC
+            let mut h264 = Codec::h264_constrained_baseline();
+            h264.set_payload_type(payload_type);
+            media_engine.register_custom_codec(h264)?;
+        } else {
+            panic!("Not enough payload type");
         }
 
         Ok(())

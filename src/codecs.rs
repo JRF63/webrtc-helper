@@ -163,7 +163,7 @@ impl Codec {
     }
 
     /// H264 [Codec] with parameters that are guaranteed to be supported by most browsers.
-    pub fn h264() -> Codec {
+    pub fn h264_constrained_baseline() -> Codec {
         // profile_idc=0x42 (Constrained Baseline)
         // profile_iop=0b11100000
         Codec::h264_custom(H264Profile::ConstrainedBaseline, None, None)

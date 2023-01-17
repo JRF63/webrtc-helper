@@ -1,5 +1,6 @@
 use super::{
-    estimator::TwccBandwidthEstimator, sender::TwccTimestampSenderStream, sync::TwccSendInfo, TwccBandwidthSender
+    estimator::TwccBandwidthEstimator, sender::TwccTimestampSenderStream, sync::TwccSendInfo,
+    TwccBandwidthSender,
 };
 use async_trait::async_trait;
 use std::{
@@ -46,27 +47,30 @@ impl RTCPReader for TwccStream {
         buf: &mut [u8],
         attributes: &Attributes,
     ) -> Result<(usize, Attributes), interceptor::Error> {
-        let now = Instant::now();
-
         let (n, attr) = self.next_reader.read(buf, attributes).await?;
 
-        let mut b = &buf[..n];
-        let packets = rtcp::packet::unmarshal(&mut b)?;
+        if let Some(byte) = buf.get(1) {
+            // Payload types of TWCC and receiver report
+            if let 205 | 201 = byte {
+                let mut b = &buf[..n];
+                let packets = rtcp::packet::unmarshal(&mut b)?;
 
-        let mut bandwidth_estimator = self.bandwidth_estimator.lock().await;
+                let mut bandwidth_estimator = self.bandwidth_estimator.lock().await;
 
-        for packet in packets {
-            let packet = packet.as_any();
-            if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
-                bandwidth_estimator.process_feedback(tcc, &self.map);
-            } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
-                if let Some(rtt_ms) = rtt_from_receiver_report(rr) {
-                    bandwidth_estimator.update_rtt(rtt_ms);
+                for packet in packets {
+                    let packet = packet.as_any();
+                    if let Some(tcc) = packet.downcast_ref::<TransportLayerCc>() {
+                        bandwidth_estimator.process_feedback(tcc, &self.map);
+                    } else if let Some(rr) = packet.downcast_ref::<ReceiverReport>() {
+                        if let Some(rtt_ms) = rtt_from_receiver_report(rr) {
+                            bandwidth_estimator.update_rtt(rtt_ms);
+                        }
+                    }
                 }
+                let now = Instant::now();
+                bandwidth_estimator.estimate(now);
             }
         }
-
-        bandwidth_estimator.estimate(now);
 
         Ok((n, attr))
     }
@@ -79,11 +83,6 @@ fn rtt_from_receiver_report(rr: &ReceiverReport) -> Option<f64> {
     rr.reports
         .last()
         .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
-
-    // rr.reports
-    //     .iter()
-    //     .map(|recp| calculate_rtt_ms(now, recp.delay, recp.last_sender_report))
-    //     .reduce(|_, item| item)
 }
 
 // Copied from interceptor::stats::StatsInterceptor
