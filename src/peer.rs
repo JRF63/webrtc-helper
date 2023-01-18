@@ -304,7 +304,7 @@ where
         codecs: Vec<Codec>,
         media_engine: &mut MediaEngine,
     ) -> Result<(), webrtc::Error> {
-        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 128u8;
+        const DYNAMIC_PAYLOAD_TYPE_START: u8 = 96u8;
 
         let mut payload_id = Some(DYNAMIC_PAYLOAD_TYPE_START);
 

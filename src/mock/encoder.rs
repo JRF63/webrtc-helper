@@ -15,12 +15,6 @@ use std::{
 };
 use webrtc::{
     ice_transport::ice_connection_state::RTCIceConnectionState,
-    rtcp::{
-        self,
-        payload_feedbacks::{
-            full_intra_request::FullIntraRequest, picture_loss_indication::PictureLossIndication,
-        },
-    },
     rtp::{
         header::Header,
         packet::Packet,
@@ -62,7 +56,7 @@ impl EncoderBuilder for MockEncoderBuilder {
     fn build(
         self: Box<Self>,
         rtp_track: Arc<TrackLocalStaticRTP>,
-        transceiver: Arc<RTCRtpTransceiver>,
+        _transceiver: Arc<RTCRtpTransceiver>,
         mut ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
         codec_capability: RTCRtpCodecCapability,
@@ -73,33 +67,12 @@ impl EncoderBuilder for MockEncoderBuilder {
             panic!("Codec not supported");
         }
 
-        let handle = tokio::runtime::Handle::current();
-        handle.spawn(async move {
-            if let Some(sender) = transceiver.sender().await {
-                tokio::spawn(async move {
-                    let mut buf = vec![0u8; 1500];
-                    while let Ok((n, _)) = sender.read(&mut buf).await {
-                        let mut raw_data = &buf[..n];
-                        if let Ok(packets) = rtcp::packet::unmarshal(&mut raw_data) {
-                            for packet in packets {
-                                let packet = packet.as_any();
-                                if let Some(_pli) = packet.downcast_ref::<PictureLossIndication>() {
-                                    // Unused
-                                } else if let Some(_fir) = packet.downcast_ref::<FullIntraRequest>()
-                                {
-                                    // Unused
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        });
-
         let stopped = Arc::new(AtomicBool::new(false));
         let stopper = stopped.clone();
         let bandwidth_clone = bandwidth_estimate.clone();
         let mut ice_connection_state_clone = ice_connection_state.clone();
+
+        let handle = tokio::runtime::Handle::current();
 
         handle.spawn(async move {
             // Wait for connection before logging bandwidth
@@ -116,6 +89,7 @@ impl EncoderBuilder for MockEncoderBuilder {
                 let send_bitrate = bandwidth_clone.borrow().bytes_per_sec_f64();
                 println!("<: {send_bitrate:.3}");
             }
+            println!("Logger stopped");
         });
 
         std::thread::spawn(move || {
@@ -145,6 +119,7 @@ impl EncoderBuilder for MockEncoderBuilder {
                 }
 
                 stopper.store(true, Ordering::Release);
+                println!("Sender stopped");
             });
         });
     }

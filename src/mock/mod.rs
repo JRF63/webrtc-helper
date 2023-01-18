@@ -33,10 +33,11 @@ async fn mock_test() {
     let handle_2 = tokio::spawn(async move {
         let mut decoder_builder = WebRtcBuilder::new(decoder_signaler, Role::Answerer);
         decoder_builder.with_decoder(Box::new(MockDecoderBuilder::new()));
-        let _decoder = decoder_builder.build().await.unwrap();
+        let decoder = decoder_builder.build().await.unwrap();
         stop_3.notified().await;
+        decoder.close().await;
     });
 
     let _ = handle_1.await;
     let _ = handle_2.await;
-}
+ }
