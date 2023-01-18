@@ -40,4 +40,6 @@ async fn mock_test() {
 
     let _ = handle_1.await;
     let _ = handle_2.await;
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
  }

@@ -1,4 +1,4 @@
-use crate::codecs::Codec;
+use crate::{codecs::Codec, peer::IceConnectionState};
 use std::sync::Arc;
 use webrtc::{
     rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, rtp_receiver::RTCRtpReceiver},
@@ -11,13 +11,18 @@ pub trait DecoderBuilder: Send {
     fn supported_codecs(&self) -> &[Codec];
 
     /// Consumes the builder to produce a decoder.
-    /// 
+    ///
     /// Data from the encoder is received through `track` while the `rtp_receiver` is used to send
     /// RTCP messages. The chosen codec is identified through `TrackRemote::codec` of `track`.
-    /// 
+    ///
     /// This function will be invoked inside a Tokio runtime such that implementations could assume
     /// that `tokio::runtime::Handle` would not panic.
-    fn build(self: Box<Self>, track: Arc<TrackRemote>, rtp_receiver: Arc<RTCRtpReceiver>);
+    fn build(
+        self: Box<Self>,
+        track: Arc<TrackRemote>,
+        rtp_receiver: Arc<RTCRtpReceiver>,
+        ice_connection_state: IceConnectionState,
+    );
 
     /// Checks if the decoder supports the given codec parameters.
     fn is_codec_supported(&self, codec_capability: &RTCRtpCodecCapability) -> bool {

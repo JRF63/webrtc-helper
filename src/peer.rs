@@ -158,6 +158,7 @@ where
             .with_setting_engine(setting_engine)
             .build();
 
+        let (ice_tx, ice_rx_1) = watch::channel(RTCIceConnectionState::default());
         let peer = Arc::new(WebRtcPeer {
             pc: api_builder
                 .new_peer_connection(RTCConfiguration {
@@ -166,6 +167,7 @@ where
                 })
                 .await?,
             signaler: self.signaler,
+            ice_tx,
             closed: Notify::new(),
         });
 
@@ -202,24 +204,23 @@ where
 
         // Monitors the ICE connection state and sends it to the encoders. Also initiates an ICE
         // restart when the connection fails.
-        let (ice_tx, ice_rx) = watch::channel(RTCIceConnectionState::default());
         let weak_ref = Arc::downgrade(&peer);
         peer.pc
             .on_ice_connection_state_change(Box::new(move |state| {
-                let _ = ice_tx.send(state);
                 let peer = weak_ref.clone();
                 Box::pin(async move {
-                    if state == RTCIceConnectionState::Failed {
-                        match self.role {
-                            Role::Offerer => {
-                                if let Some(peer) = peer.upgrade() {
+                    if let Some(peer) = peer.upgrade() {
+                        let _ = peer.ice_tx.send(state);
+                        if state == RTCIceConnectionState::Failed {
+                            match self.role {
+                                Role::Offerer => {
                                     // TODO: Test ICE restart
                                     if let Err(e) = peer.start_negotiation(true).await {
                                         panic!("{e}");
                                     }
                                 }
+                                Role::Answerer => (), // Offerer should be the one to initiate ICE restart
                             }
-                            Role::Answerer => (), // Offerer should be the one to initiate ICE restart
                         }
                     }
                 })
@@ -243,6 +244,7 @@ where
         tokio::spawn(Self::signaler_message_handler(peer.clone()));
 
         // Handle the received track using one of the decoders
+        let ice_rx_2 = ice_rx_1.clone();
         let decoders = Arc::new(Mutex::new(self.decoders));
         peer.pc.on_track(Box::new(
             move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
@@ -252,6 +254,8 @@ where
                 };
 
                 let decoders = decoders.clone();
+
+                let ice_rx = ice_rx_2.clone();
 
                 // Pick one decoder that can handle the codec of the track
                 Box::pin(async move {
@@ -266,7 +270,7 @@ where
                     }
                     if let Some(index) = matched_index {
                         let decoder = decoders.swap_remove(index);
-                        decoder.build(track, receiver);
+                        decoder.build(track, receiver, ice_rx);
                     }
                 })
             },
@@ -276,7 +280,7 @@ where
             if let Some(bandwidth_estimate) = &bandwidth_estimate {
                 let track = EncoderTrackLocal::new(
                     encoder_builder,
-                    ice_rx.clone(),
+                    ice_rx_1.clone(),
                     bandwidth_estimate.clone(),
                 )
                 .await;
@@ -423,6 +427,7 @@ where
 pub struct WebRtcPeer<S: Signaler + 'static> {
     pc: RTCPeerConnection,
     signaler: S,
+    ice_tx: watch::Sender<RTCIceConnectionState>,
     closed: Notify,
 }
 
@@ -436,6 +441,7 @@ impl<S: Signaler + 'static> WebRtcPeer<S> {
     /// Close the `WebRtcPeer`.
     pub async fn close(&self) {
         let _ = self.signaler.send(Message::Bye).await;
+        let _ = self.ice_tx.send(RTCIceConnectionState::Closed);
         self.closed.notify_waiters();
     }
 
