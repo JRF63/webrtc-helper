@@ -1,5 +1,5 @@
 use crate::{
-    codecs::{Codec, MediaEngineExt},
+    codecs::{Codec, H264Codec, MediaEngineExt},
     decoder::DecoderBuilder,
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::{configure_custom_twcc_sender, twcc::TwccBandwidthEstimate},
@@ -344,7 +344,7 @@ where
 
         if let Some(payload_type) = payload_id {
             // Required for the browser to send TWCC
-            let mut h264 = Codec::h264_constrained_baseline();
+            let mut h264: Codec = H264Codec::constrained_baseline().into();
             h264.set_payload_type(payload_type);
             media_engine.register_custom_codec(h264)?;
         } else {

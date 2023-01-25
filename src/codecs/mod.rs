@@ -7,7 +7,7 @@ use webrtc::{
         RTCPFeedback,
     },
 };
-pub use self::h264::{H264Profile, parse_parameter_sets_for_resolution};
+pub use self::h264::{H264Profile, H264Codec};
 
 const MIME_TYPE_H264: &str = "video/H264";
 const MIME_TYPE_OPUS: &str = "audio/opus";
@@ -124,52 +124,6 @@ impl Codec {
             ..Default::default()
         };
         Codec::new(parameters, CodecType::Audio)
-    }
-
-    /// Create an H.264 [Codec] with the given parameters as defined in [RFC6184][RFC6184].
-    ///
-    /// [RFC6184]: https://www.rfc-editor.org/rfc/rfc6184.html#section-8.1
-    pub fn h264_custom(
-        profile: H264Profile,
-        level_idc: Option<u8>,
-        sps_and_pps: Option<(&[u8], &[u8])>,
-    ) -> Codec {
-        // level_idc=0x1f (Level 3.1)
-        // Hardcoded since level-asymmetry-allowed is enabled
-        let level_idc = level_idc.unwrap_or(0x1f);
-
-        // level-asymmetry-allowed=1 (Offerer can send at a higher level (bitrate) than negotiated)
-        // packetization-mode=1 (Single NAL units, STAP-A's, and FU-A's only)
-        let mut sdp_fmtp_line = format!(
-            "level-asymmetry-allowed=1;\
-            packetization-mode=1;\
-            profile-level-id={}{level_idc:02x}",
-            profile.profile_idc_iop()
-        );
-        if let Some((sps, pps)) = sps_and_pps {
-            let sps_base64 = base64::encode(sps);
-            let pps_base64 = base64::encode(pps);
-            sdp_fmtp_line.push_str(&format!(";sprop-parameter-sets={sps_base64},{pps_base64}"))
-        }
-        let parameters = RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                clock_rate: 90000,
-                channels: 0,
-                sdp_fmtp_line,
-                rtcp_feedback: supported_video_rtcp_feedbacks(),
-            },
-            payload_type: 0,
-            ..Default::default()
-        };
-        Codec::new(parameters, CodecType::Video)
-    }
-
-    /// H264 [Codec] with parameters that are guaranteed to be supported by most browsers.
-    pub fn h264_constrained_baseline() -> Codec {
-        // profile_idc=0x42 (Constrained Baseline)
-        // profile_iop=0b11100000
-        Codec::h264_custom(H264Profile::ConstrainedBaseline, None, None)
     }
 }
 
