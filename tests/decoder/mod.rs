@@ -1,6 +1,6 @@
 use webrtc::{rtp_transceiver::rtp_receiver::RTCRtpReceiver, track::track_remote::TrackRemote, ice_transport::ice_connection_state::RTCIceConnectionState};
 
-use crate::{codecs::Codec, decoder::DecoderBuilder, peer::IceConnectionState};
+use webrtc_helper::{codecs::Codec, decoder::DecoderBuilder, peer::IceConnectionState};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -19,7 +19,7 @@ impl MockDecoderBuilder {
 }
 
 impl DecoderBuilder for MockDecoderBuilder {
-    fn supported_codecs(&self) -> &[crate::codecs::Codec] {
+    fn supported_codecs(&self) -> &[Codec] {
         &self.codecs
     }
 

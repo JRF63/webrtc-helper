@@ -1,4 +1,4 @@
-use crate::signaling::{Message, Signaler};
+use webrtc_helper::signaling::{Message, Signaler};
 use async_trait::async_trait;
 use tokio::sync::{mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel}, Mutex};
 

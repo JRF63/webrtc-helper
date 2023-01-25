@@ -6,9 +6,6 @@ pub mod peer;
 pub mod signaling;
 pub mod util;
 
-#[cfg(test)]
-mod mock;
-
 pub use self::{
     codecs::Codec,
     decoder::DecoderBuilder,

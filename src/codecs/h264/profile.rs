@@ -1,4 +1,3 @@
-
 /// H.264 codec profile
 #[non_exhaustive]
 pub enum H264Profile {

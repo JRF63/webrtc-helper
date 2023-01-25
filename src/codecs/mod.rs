@@ -7,7 +7,7 @@ use webrtc::{
         RTCPFeedback,
     },
 };
-pub use self::h264::H264Profile;
+pub use self::h264::{H264Profile, parse_parameter_sets_for_resolution};
 
 const MIME_TYPE_H264: &str = "video/H264";
 const MIME_TYPE_OPUS: &str = "audio/opus";

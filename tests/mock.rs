@@ -4,7 +4,7 @@ mod encoder;
 mod signaling;
 
 use self::{decoder::MockDecoderBuilder, encoder::MockEncoderBuilder, signaling::MockSignaler};
-use crate::peer::{Role, WebRtcBuilder};
+use webrtc_helper::peer::{Role, WebRtcBuilder};
 use std::{time::Duration, sync::Arc};
 use tokio::sync::Notify;
 
