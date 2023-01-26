@@ -1,5 +1,8 @@
 mod h264;
 
+pub use self::h264::{
+    H264Codec, H264PayloadReader, H264PayloadReaderError, H264Profile, H264SampleSender,
+};
 use webrtc::{
     api::media_engine::MediaEngine,
     rtp_transceiver::{
@@ -7,7 +10,6 @@ use webrtc::{
         RTCPFeedback,
     },
 };
-pub use self::h264::{H264Profile, H264Codec, H264SampleSender};
 
 const MIME_TYPE_H264: &str = "video/H264";
 const MIME_TYPE_OPUS: &str = "audio/opus";

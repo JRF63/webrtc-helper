@@ -1,9 +1,14 @@
-mod sample_receiver;
-mod sample_sender;
+mod constants;
+mod parameter_set;
+mod payload_reader;
 mod profile;
-mod util;
+mod sample_sender;
 
-pub use self::{profile::H264Profile, sample_sender::H264SampleSender};
+pub use self::{
+    payload_reader::{H264PayloadReader, H264PayloadReaderError},
+    profile::H264Profile,
+    sample_sender::H264SampleSender,
+};
 use super::{supported_video_rtcp_feedbacks, Codec, CodecType, MIME_TYPE_H264};
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters};
 
@@ -77,6 +82,6 @@ impl H264Codec {
 
     /// Read the (width, height) of the video stream from the SPS/PPS parameter sets.
     pub fn get_resolution(nal: &[u8]) -> Option<(usize, usize)> {
-        util::parse_parameter_sets_for_resolution(nal)
+        parameter_set::parse_parameter_sets_for_resolution(nal)
     }
 }

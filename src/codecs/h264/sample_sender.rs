@@ -6,6 +6,7 @@ use webrtc::{
     rtp::{header::Header, packet::Packet},
     track::track_local::TrackLocalWriter,
 };
+use super::constants::*;
 
 trait RtpHeaderExt {
     fn advance_sequence_number(&mut self);
@@ -23,19 +24,6 @@ pub struct H264SampleSender {
     sps_nalu: Option<Bytes>,
     pps_nalu: Option<Bytes>,
 }
-
-const FUA_NALU_TYPE: u8 = 28;
-const SPS_NALU_TYPE: u8 = 7;
-const PPS_NALU_TYPE: u8 = 8;
-const AUD_NALU_TYPE: u8 = 9;
-const FILLER_NALU_TYPE: u8 = 12;
-
-const FUA_HEADER_SIZE: usize = 2;
-
-const NALU_TYPE_BITMASK: u8 = 0x1F;
-const NALU_REF_IDC_BITMASK: u8 = 0x60;
-
-const OUTPUT_STAP_AHEADER: u8 = 0x78;
 
 impl H264SampleSender {
     fn next_ind(nalu: &[u8], start: usize) -> (isize, isize) {
