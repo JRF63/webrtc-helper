@@ -1,7 +1,8 @@
+mod sample_sender;
 mod profile;
 mod util;
 
-pub use self::profile::H264Profile;
+pub use self::{profile::H264Profile, sample_sender::H264SampleSender};
 use super::{supported_video_rtcp_feedbacks, Codec, CodecType, MIME_TYPE_H264};
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters};
 

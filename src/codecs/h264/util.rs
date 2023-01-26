@@ -102,6 +102,7 @@ pub fn parse_parameter_sets_for_resolution(buf: &[u8]) -> Option<(usize, usize)>
     exp_golomb.read_single_bit()?;
     let frame_cropping_flag = exp_golomb.read_single_bit()?;
 
+    // These are interpreted as 0 if frame_cropping_flag == 0
     let mut frame_crop_left_offset = 0;
     let mut frame_crop_right_offset = 0;
     let mut frame_crop_top_offset = 0;
@@ -248,7 +249,7 @@ fn exp_golomb_count_read_unsigned() {
 
 #[test]
 fn test_parse() {
-    const NALU: &'static [u8] = include_bytes!("csd.bin");
+    const NALU: &'static [u8] = include_bytes!("nalus/csd.bin");
     assert_eq!(
         parse_parameter_sets_for_resolution(NALU),
         Some((1920, 1080))
