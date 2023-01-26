@@ -38,7 +38,7 @@ const NALU_REF_IDC_BITMASK: u8 = 0x60;
 const OUTPUT_STAP_AHEADER: u8 = 0x78;
 
 impl H264SampleSender {
-    fn next_ind(nalu: &Bytes, start: usize) -> (isize, isize) {
+    fn next_ind(nalu: &[u8], start: usize) -> (isize, isize) {
         let mut zero_count = 0;
 
         for (i, &b) in nalu[start..].iter().enumerate() {
@@ -56,7 +56,7 @@ impl H264SampleSender {
     #[cold]
     async fn emit_single_nalu<T>(
         header: &mut Header,
-        nalu: &Bytes,
+        nalu: &[u8],
         mtu: usize,
         writer: &T,
     ) -> Result<(), webrtc::Error>
@@ -66,7 +66,7 @@ impl H264SampleSender {
         debug_assert!(nalu.len() <= mtu);
         let mut p = Packet {
             header: header.clone(),
-            payload: Bytes::from(nalu.clone()),
+            payload: Bytes::copy_from_slice(nalu),
         };
         p.header.marker = true;
         header.advance_sequence_number();
@@ -145,7 +145,7 @@ impl H264SampleSender {
         header: &mut Header,
         nalu_type: u8,
         nalu_ref_idc: u8,
-        nalu: &Bytes,
+        nalu: &[u8],
         mtu: usize,
         writer: &T,
     ) -> Result<(), webrtc::Error>
@@ -234,7 +234,7 @@ impl H264SampleSender {
         header: &mut Header,
         nalu_type: u8,
         nalu_ref_idc: u8,
-        nalu: &Bytes,
+        nalu: &[u8],
         mtu: usize,
         writer: &T,
     ) -> Result<(), webrtc::Error>
@@ -284,7 +284,7 @@ impl H264SampleSender {
     async fn emit<T>(
         &mut self,
         header: &mut Header,
-        nalu: &Bytes,
+        nalu: &[u8],
         mtu: usize,
         writer: &T,
     ) -> Result<(), webrtc::Error>
@@ -301,10 +301,10 @@ impl H264SampleSender {
         if nalu_type == AUD_NALU_TYPE || nalu_type == FILLER_NALU_TYPE {
             Self::emit_unhandled_nalu()
         } else if nalu_type == SPS_NALU_TYPE {
-            self.process_parameter_sets(header, Some(nalu.clone()), None, mtu, writer)
+            self.process_parameter_sets(header, Some(Bytes::copy_from_slice(nalu)), None, mtu, writer)
                 .await
         } else if nalu_type == PPS_NALU_TYPE {
-            self.process_parameter_sets(header, None, Some(nalu.clone()), mtu, writer)
+            self.process_parameter_sets(header, None, Some(Bytes::copy_from_slice(nalu)), mtu, writer)
                 .await
         } else {
             if nalu.len() <= mtu {
@@ -320,7 +320,7 @@ impl H264SampleSender {
         &mut self,
         mtu: usize,
         header: &mut Header,
-        payload: &Bytes,
+        payload: &[u8],
         writer: &T,
     ) -> Result<(), webrtc::Error>
     where
@@ -344,14 +344,14 @@ impl H264SampleSender {
                 if next_ind_start != -1 {
                     self.emit(
                         header,
-                        &payload.slice(prev_start..next_ind_start as usize),
+                        &payload[prev_start..next_ind_start as usize],
                         mtu,
                         writer,
                     )
                     .await?;
                 } else {
                     // Emit until end of stream, no end indicator found
-                    self.emit(header, &payload.slice(prev_start..), mtu, writer)
+                    self.emit(header, &payload[prev_start..], mtu, writer)
                         .await?;
                 }
             }
