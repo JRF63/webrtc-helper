@@ -1,6 +1,9 @@
-use webrtc_helper::signaling::{Message, Signaler};
 use async_trait::async_trait;
-use tokio::sync::{mpsc::{UnboundedSender, UnboundedReceiver, unbounded_channel}, Mutex};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    Mutex,
+};
+use webrtc_helper::signaling::{Message, Signaler};
 
 pub struct MockSignaler {
     tx: UnboundedSender<Message>,
@@ -9,16 +12,21 @@ pub struct MockSignaler {
 
 #[async_trait]
 impl Signaler for MockSignaler {
-    type Error = std::io::Error;
-
-    async fn recv(&self) -> Result<Message, Self::Error> {
+    async fn recv(&self) -> Result<Message, Box<dyn std::error::Error + Send>> {
         let mut lock = self.rx.lock().await;
         let msg = lock.recv().await;
-        msg.ok_or(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+        msg.ok_or(Box::new(std::io::Error::from(
+            std::io::ErrorKind::UnexpectedEof,
+        )))
     }
 
-    async fn send(&self, msg: Message) -> Result<(), Self::Error> {
-        self.tx.send(msg).map_err(|_| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+    async fn send(&self, msg: Message) -> Result<(), Box<dyn std::error::Error + Send>> {
+        match self.tx.send(msg) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Box::new(std::io::Error::from(
+                std::io::ErrorKind::UnexpectedEof,
+            ))),
+        }
     }
 }
 
@@ -40,8 +48,8 @@ impl MockSignaler {
 
 #[cfg(test)]
 mod tests {
-    use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
     use super::*;
+    use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 
     #[tokio::test]
     async fn signaler_test() {

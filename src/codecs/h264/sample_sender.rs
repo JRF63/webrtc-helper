@@ -1,12 +1,12 @@
 //! Modified from rtp::codecs::h264::H264Payloader to allow directly sending the packets without
 //! allocating a Vec and annotated infrequently encountered branches with #[cold].
 
+use super::constants::*;
 use bytes::{BufMut, Bytes, BytesMut};
 use webrtc::{
     rtp::{header::Header, packet::Packet},
     track::track_local::TrackLocalWriter,
 };
-use super::constants::*;
 
 trait RtpHeaderExt {
     fn advance_sequence_number(&mut self);
@@ -289,11 +289,23 @@ impl H264SampleSender {
         if nalu_type == AUD_NALU_TYPE || nalu_type == FILLER_NALU_TYPE {
             Self::emit_unhandled_nalu()
         } else if nalu_type == SPS_NALU_TYPE {
-            self.process_parameter_sets(header, Some(Bytes::copy_from_slice(nalu)), None, mtu, writer)
-                .await
+            self.process_parameter_sets(
+                header,
+                Some(Bytes::copy_from_slice(nalu)),
+                None,
+                mtu,
+                writer,
+            )
+            .await
         } else if nalu_type == PPS_NALU_TYPE {
-            self.process_parameter_sets(header, None, Some(Bytes::copy_from_slice(nalu)), mtu, writer)
-                .await
+            self.process_parameter_sets(
+                header,
+                None,
+                Some(Bytes::copy_from_slice(nalu)),
+                mtu,
+                writer,
+            )
+            .await
         } else {
             if nalu.len() <= mtu {
                 Self::emit_single_nalu(header, nalu, mtu, writer).await
@@ -326,7 +338,8 @@ impl H264SampleSender {
         } else {
             while next_ind_start != -1 {
                 let prev_start = (next_ind_start + next_ind_len) as usize;
-                let (next_ind_start2, next_ind_len2) = H264SampleSender::next_ind(payload, prev_start);
+                let (next_ind_start2, next_ind_len2) =
+                    H264SampleSender::next_ind(payload, prev_start);
                 next_ind_start = next_ind_start2;
                 next_ind_len = next_ind_len2;
                 if next_ind_start != -1 {

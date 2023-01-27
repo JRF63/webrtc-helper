@@ -1,5 +1,5 @@
-use webrtc_helper::codecs::{Codec, CodecType};
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters};
+use webrtc_helper::codecs::{Codec, CodecType};
 
 pub fn mock_codec() -> Codec {
     let parameters = RTCRtpCodecParameters {

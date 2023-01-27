@@ -17,13 +17,11 @@ pub enum Message {
 /// Trait that encapsulates the WebRTC's notion of a signaling channel.
 #[async_trait]
 pub trait Signaler: Send + Sync {
-    type Error: Send + std::fmt::Display;
-
     /// Blocks until a message is received.
-    async fn recv(&self) -> Result<Message, Self::Error>;
+    async fn recv(&self) -> Result<Message, Box<dyn std::error::Error + Send>>;
 
     /// Send a message through the channel.
-    async fn send(&self, msg: Message) -> Result<(), Self::Error>;
+    async fn send(&self, msg: Message) -> Result<(), Box<dyn std::error::Error + Send>>;
 }
 
 #[cfg(test)]
@@ -42,6 +40,5 @@ mod tests {
             println!("{json}");
             let _: Message = serde_json::from_str(&json).unwrap();
         }
-        
     }
 }

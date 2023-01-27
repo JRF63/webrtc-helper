@@ -4,11 +4,11 @@ mod encoder;
 mod signaling;
 
 use self::{decoder::MockDecoderBuilder, encoder::MockEncoderBuilder, signaling::MockSignaler};
-use webrtc_helper::peer::{Role, WebRtcBuilder};
-use std::{time::Duration, sync::Arc};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::Notify;
+use webrtc_helper::peer::{Role, WebRtcBuilder};
 
-#[tokio::test(flavor ="multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mock_test() {
     env_logger::init();
     let (encoder_signaler, decoder_signaler) = MockSignaler::channel();
@@ -42,4 +42,4 @@ async fn mock_test() {
     let _ = handle_2.await;
 
     tokio::time::sleep(Duration::from_secs(1)).await;
- }
+}

@@ -112,7 +112,7 @@ where
     }
 
     /// Consume the builder and build a `WebRtcPeer`.
-    pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer<S>>> {
+    pub async fn build(self) -> webrtc::error::Result<Arc<WebRtcPeer>> {
         let mut media_engine = MediaEngine::default();
         {
             let mut codecs = Vec::new();
@@ -166,7 +166,7 @@ where
                     ..Default::default()
                 })
                 .await?,
-            signaler: self.signaler,
+            signaler: Box::new(self.signaler),
             ice_tx,
             closed: Notify::new(),
         });
@@ -355,7 +355,7 @@ where
     }
 
     // Implements the impolite peer of "perfect negotiation".
-    async fn signaler_message_handler(peer: Arc<WebRtcPeer<S>>) -> Result<(), webrtc::Error> {
+    async fn signaler_message_handler(peer: Arc<WebRtcPeer>) -> Result<(), webrtc::Error> {
         loop {
             if let Ok(msg) = peer.signaler.recv().await {
                 match msg {
@@ -424,17 +424,20 @@ where
 ///
 /// Usage is through passing `EncoderBuilder`, `DecoderBuilder` and `OnDataChannelHdlrFn` to the
 /// builder.
-pub struct WebRtcPeer<S: Signaler + 'static> {
+pub struct WebRtcPeer {
     pc: RTCPeerConnection,
-    signaler: S,
+    signaler: Box<dyn Signaler + 'static>,
     ice_tx: watch::Sender<RTCIceConnectionState>,
     closed: Notify,
 }
 
-impl<S: Signaler + 'static> WebRtcPeer<S> {
+impl WebRtcPeer {
     /// Returns a builder for a `WebRtcPeer`. The signaling channel implementation and the role
     /// of the peer needs to be both supplied.
-    pub fn builder(signaler: S, role: Role) -> WebRtcBuilder<S> {
+    pub fn builder<S>(signaler: S, role: Role) -> WebRtcBuilder<S>
+    where
+        S: Signaler + 'static,
+    {
         WebRtcBuilder::new(signaler, role)
     }
 
