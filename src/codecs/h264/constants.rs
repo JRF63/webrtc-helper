@@ -1,5 +1,3 @@
-use bytes::Bytes;
-
 pub const STAPA_NALU_TYPE: u8 = 24;
 pub const FUA_NALU_TYPE: u8 = 28;
 // pub const FUB_NALU_TYPE: u8 = 29;
@@ -19,4 +17,4 @@ pub const FU_END_BITMASK: u8 = 0x40;
 
 pub const OUTPUT_STAP_AHEADER: u8 = 0x78;
 
-pub static ANNEXB_NALUSTART_CODE: Bytes = Bytes::from_static(&[0x00, 0x00, 0x00, 0x01]);
+pub static ANNEXB_NALUSTART_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];

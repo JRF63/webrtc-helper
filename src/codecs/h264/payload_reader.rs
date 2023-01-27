@@ -1,7 +1,7 @@
 //! Modifed from the `Depacketizer` impl of [webrtc::rtp::codecs::h264::H264Packet].
 
 use super::constants::*;
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 
 /// `H264PayloadReader` reads payloads from RTP packets and produces NAL units.
 pub struct H264PayloadReader<'a> {
@@ -28,8 +28,8 @@ impl<'a> H264PayloadReader<'a> {
     pub fn new(buffer: &'a mut [u8]) -> H264PayloadReader<'a> {
         let buf_start = buffer.as_mut_ptr();
         H264PayloadReader {
-            // This leaves the original mut slice untouched when doing push* operations
-            buffer: unsafe { std::slice::from_raw_parts_mut(buf_start, buffer.len()) },
+            // The original mut slice should still be untouched by the put* operations
+            buffer,
             is_aggregating: false,
             init_addr: buf_start as usize,
         }
@@ -41,17 +41,17 @@ impl<'a> H264PayloadReader<'a> {
     }
 
     #[cold]
-    fn single_nalu(mut self, payload: &Bytes) -> Result<usize, H264PayloadReaderError<'a>> {
+    fn single_nalu(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
         if self.is_aggregating {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
-        self.buffer.put(&*ANNEXB_NALUSTART_CODE);
-        self.buffer.put(&*payload.clone());
+        self.buffer.put(ANNEXB_NALUSTART_CODE);
+        self.buffer.put(payload);
         Ok(self.num_bytes_written())
     }
 
     #[cold]
-    fn stapa_nalu(mut self, payload: &Bytes) -> Result<usize, H264PayloadReaderError<'a>> {
+    fn stapa_nalu(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
         if self.is_aggregating {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
@@ -65,9 +65,9 @@ impl<'a> H264PayloadReader<'a> {
                 return Err(H264PayloadReaderError::StapASizeLargerThanBuffer);
             }
 
-            self.buffer.put(&*ANNEXB_NALUSTART_CODE);
+            self.buffer.put(ANNEXB_NALUSTART_CODE);
             self.buffer
-                .put(&*payload.slice(curr_offset..curr_offset + nalu_size));
+                .put(&payload[curr_offset..curr_offset + nalu_size]);
             curr_offset += nalu_size;
         }
 
@@ -75,14 +75,14 @@ impl<'a> H264PayloadReader<'a> {
     }
 
     #[cold]
-    fn other_nalu(self, _payload: &Bytes) -> Result<usize, H264PayloadReaderError<'a>> {
+    fn other_nalu(self, _payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
         Err(H264PayloadReaderError::NaluTypeIsNotHandled)
     }
 
     /// Reads a payload into the buffer. This method returns the number of bytes written to the
     /// original buffer upon success, indicating one or more NALU has been successfully written to
     /// the buffer.
-    pub fn read_payload(mut self, payload: &Bytes) -> Result<usize, H264PayloadReaderError<'a>> {
+    pub fn read_payload(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
         if payload.len() <= 2 {
             return Err(H264PayloadReaderError::ErrShortPacket);
         }
@@ -117,12 +117,12 @@ impl<'a> H264PayloadReader<'a> {
                     let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
                     let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
 
-                    self.buffer.put(&*ANNEXB_NALUSTART_CODE);
+                    self.buffer.put(ANNEXB_NALUSTART_CODE);
                     self.buffer.put_u8(nalu_ref_idc | fragmented_nalu_type);
                 }
 
                 // Skip first 2 bytes then add to buffer
-                self.buffer.put(payload.slice(FUA_HEADER_SIZE..));
+                self.buffer.put(&payload[FUA_HEADER_SIZE..]);
 
                 if b1 & FU_END_BITMASK != 0 {
                     Ok(self.num_bytes_written())
@@ -138,6 +138,7 @@ impl<'a> H264PayloadReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use webrtc::rtp::{codecs::h264::H264Payloader, packetizer::Payloader};
 
     const TEST_NALU: &[u8] = include_bytes!("nalus/1.h264");
