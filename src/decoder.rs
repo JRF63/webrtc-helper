@@ -1,4 +1,4 @@
-use crate::{codecs::Codec, peer::IceConnectionState};
+use crate::{Codec, WebRtcPeer};
 use std::sync::Arc;
 use webrtc::{
     rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, rtp_receiver::RTCRtpReceiver},
@@ -21,7 +21,7 @@ pub trait DecoderBuilder: Send {
         self: Box<Self>,
         track: Arc<TrackRemote>,
         rtp_receiver: Arc<RTCRtpReceiver>,
-        ice_connection_state: IceConnectionState,
+        peer: Arc<WebRtcPeer>,
     );
 
     /// Checks if the decoder supports the given codec parameters.

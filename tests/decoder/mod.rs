@@ -1,5 +1,5 @@
 use webrtc::{
-    ice_transport::ice_connection_state::RTCIceConnectionState,
+    peer_connection::peer_connection_state::RTCPeerConnectionState,
     rtp_transceiver::rtp_receiver::RTCRtpReceiver, track::track_remote::TrackRemote,
 };
 
@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use webrtc_helper::{codecs::Codec, decoder::DecoderBuilder, peer::IceConnectionState};
+use webrtc_helper::{decoder::DecoderBuilder, Codec, WebRtcPeer};
 
 pub struct MockDecoderBuilder {
     codecs: Vec<Codec>,
@@ -30,7 +30,7 @@ impl DecoderBuilder for MockDecoderBuilder {
         self: Box<Self>,
         track: Arc<TrackRemote>,
         _rtp_receiver: Arc<RTCRtpReceiver>,
-        ice_connection_state: IceConnectionState,
+        peer: Arc<WebRtcPeer>,
     ) {
         let handle = tokio::runtime::Handle::current();
         std::thread::spawn(move || {
@@ -42,10 +42,14 @@ impl DecoderBuilder for MockDecoderBuilder {
                 let mut packet_bytes_accum = 0;
                 let mut buffer = vec![0; 1500];
 
-                let mut interval = tokio::time::interval(Duration::from_secs(3));
-                interval.tick().await;
+                while peer.connection_state() != RTCPeerConnectionState::Connected {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
 
-                while *ice_connection_state.borrow() == RTCIceConnectionState::Connected {
+                let mut interval = tokio::time::interval(Duration::from_secs(3));
+                interval.tick().await; // Returns immediately
+
+                while peer.connection_state() == RTCPeerConnectionState::Connected {
                     tokio::select! {
                         read_result = track.read(&mut buffer) => {
                             if let Ok((packet_bytes, _)) = read_result {

@@ -244,8 +244,8 @@ where
         tokio::spawn(Self::signaler_message_handler(peer.clone()));
 
         // Handle the received track using one of the decoders
-        let ice_rx_2 = ice_rx_1.clone();
         let decoders = Arc::new(Mutex::new(self.decoders));
+        let weak_ref = Arc::downgrade(&peer);
         peer.pc.on_track(Box::new(
             move |track: Option<Arc<TrackRemote>>, receiver: Option<Arc<RTCRtpReceiver>>| {
                 let (track, receiver) = match (track, receiver) {
@@ -254,23 +254,24 @@ where
                 };
 
                 let decoders = decoders.clone();
-
-                let ice_rx = ice_rx_2.clone();
+                let peer = weak_ref.clone();
 
                 // Pick one decoder that can handle the codec of the track
                 Box::pin(async move {
-                    let codec = track.codec().await;
-                    let mut decoders = decoders.lock().await;
-                    let mut matched_index = None;
-                    for (index, decoder) in decoders.iter().enumerate() {
-                        if decoder.is_codec_supported(&codec.capability) {
-                            matched_index = Some(index);
-                            break;
+                    if let Some(peer) = peer.upgrade() {
+                        let codec = track.codec().await;
+                        let mut decoders = decoders.lock().await;
+                        let mut matched_index = None;
+                        for (index, decoder) in decoders.iter().enumerate() {
+                            if decoder.is_codec_supported(&codec.capability) {
+                                matched_index = Some(index);
+                                break;
+                            }
                         }
-                    }
-                    if let Some(index) = matched_index {
-                        let decoder = decoders.swap_remove(index);
-                        decoder.build(track, receiver, ice_rx);
+                        if let Some(index) = matched_index {
+                            let decoder = decoders.swap_remove(index);
+                            decoder.build(track, receiver, peer);
+                        }
                     }
                 })
             },
@@ -470,5 +471,13 @@ impl WebRtcPeer {
             .await
             .map_err(|_| webrtc::Error::ErrUnknownType)?;
         Ok(())
+    }
+}
+
+impl std::ops::Deref for WebRtcPeer {
+    type Target = RTCPeerConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pc
     }
 }
