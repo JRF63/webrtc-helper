@@ -1,4 +1,4 @@
-use crate::{Codec, WebRtcPeer};
+use crate::{codecs::CodecType, Codec, WebRtcPeer};
 use std::sync::Arc;
 use webrtc::{
     rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, rtp_receiver::RTCRtpReceiver},
@@ -9,6 +9,9 @@ use webrtc::{
 pub trait DecoderBuilder: Send {
     /// Lists all the supported codecs of the decoder.
     fn supported_codecs(&self) -> &[Codec];
+
+    /// Whether the builder is for an audio or video codec.
+    fn codec_type(&self) -> CodecType;
 
     /// Consumes the builder to produce a decoder.
     ///

@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use webrtc_helper::{decoder::DecoderBuilder, Codec, WebRtcPeer};
+use webrtc_helper::{codecs::CodecType, decoder::DecoderBuilder, Codec, WebRtcPeer};
 
 pub struct MockDecoderBuilder {
     codecs: Vec<Codec>,
@@ -24,6 +24,10 @@ impl MockDecoderBuilder {
 impl DecoderBuilder for MockDecoderBuilder {
     fn supported_codecs(&self) -> &[Codec] {
         &self.codecs
+    }
+
+    fn codec_type(&self) -> CodecType {
+        CodecType::Video
     }
 
     fn build(

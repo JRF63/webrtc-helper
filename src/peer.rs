@@ -26,7 +26,10 @@ use webrtc::{
         peer_connection_state::RTCPeerConnectionState, sdp::sdp_type::RTCSdpType,
         signaling_state::RTCSignalingState, OnDataChannelHdlrFn, RTCPeerConnection,
     },
-    rtp_transceiver::rtp_receiver::RTCRtpReceiver,
+    rtp_transceiver::{
+        rtp_receiver::RTCRtpReceiver, rtp_transceiver_direction::RTCRtpTransceiverDirection,
+        RTCRtpTransceiverInit,
+    },
     track::track_remote::TrackRemote,
 };
 
@@ -185,6 +188,24 @@ where
                         }
                     })
                 }));
+
+                // Need to do this else webrtc-rs would not include audio/video in the SDP
+                let codec_types: Vec<_> = self
+                    .decoders
+                    .iter()
+                    .map(|decoder| decoder.codec_type())
+                    .collect();
+                for codec_type in codec_types {
+                    peer.pc
+                        .add_transceiver_from_kind(
+                            codec_type.into(),
+                            &[RTCRtpTransceiverInit {
+                                direction: RTCRtpTransceiverDirection::Recvonly,
+                                send_encodings: Vec::new(),
+                            }],
+                        )
+                        .await?;
+                }
             }
             Role::Answerer => (),
         }
@@ -365,7 +386,7 @@ where
                 match msg {
                     Message::Sdp(sdp) => {
                         let sdp_type = sdp.sdp_type;
-
+                        
                         if role == Role::Offerer
                             && sdp_type == RTCSdpType::Offer
                             && peer.pc.signaling_state() != RTCSignalingState::Stable
