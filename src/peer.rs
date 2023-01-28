@@ -241,7 +241,7 @@ where
             }));
 
         // Spawn a task to concurrently handle the messages received from the signaling channel
-        tokio::spawn(Self::signaler_message_handler(peer.clone()));
+        tokio::spawn(Self::signaler_message_handler(peer.clone(), self.role));
 
         // Handle the received track using one of the decoders
         let decoders = Arc::new(Mutex::new(self.decoders));
@@ -356,14 +356,18 @@ where
     }
 
     // Implements the impolite peer of "perfect negotiation".
-    async fn signaler_message_handler(peer: Arc<WebRtcPeer>) -> Result<(), webrtc::Error> {
+    async fn signaler_message_handler(
+        peer: Arc<WebRtcPeer>,
+        role: Role,
+    ) -> Result<(), webrtc::Error> {
         loop {
             if let Ok(msg) = peer.signaler.recv().await {
                 match msg {
                     Message::Sdp(sdp) => {
                         let sdp_type = sdp.sdp_type;
 
-                        if sdp_type == RTCSdpType::Offer
+                        if role == Role::Offerer
+                            && sdp_type == RTCSdpType::Offer
                             && peer.pc.signaling_state() != RTCSignalingState::Stable
                         {
                             continue;
