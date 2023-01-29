@@ -20,6 +20,7 @@ pub enum H264PayloadReaderError<'a> {
     StapASizeLargerThanBuffer,
     NaluTypeIsNotHandled,
     AggregationInterrupted,
+    MissedAggregateStart,
     NeedMoreInput(H264PayloadReader<'a>),
 }
 
@@ -112,13 +113,17 @@ impl<'a> H264PayloadReader<'a> {
                 let b1 = payload[1];
 
                 if !self.is_aggregating {
-                    self.is_aggregating = true;
+                    if b1 & FU_START_BITMASK != 0 {
+                        self.is_aggregating = true;
 
-                    let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
-                    let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
+                        let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
+                        let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
 
-                    self.buffer.put(ANNEXB_NALUSTART_CODE);
-                    self.buffer.put_u8(nalu_ref_idc | fragmented_nalu_type);
+                        self.buffer.put(ANNEXB_NALUSTART_CODE);
+                        self.buffer.put_u8(nalu_ref_idc | fragmented_nalu_type);
+                    } else {
+                        return Err(H264PayloadReaderError::MissedAggregateStart);
+                    }
                 }
 
                 // Skip first 2 bytes then add to buffer

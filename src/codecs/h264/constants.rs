@@ -12,7 +12,7 @@ pub const STAPA_NALU_LENGTH_SIZE: usize = 2;
 
 pub const NALU_TYPE_BITMASK: u8 = 0x1F;
 pub const NALU_REF_IDC_BITMASK: u8 = 0x60;
-// pub const FU_START_BITMASK: u8 = 0x80;
+pub const FU_START_BITMASK: u8 = 0x80;
 pub const FU_END_BITMASK: u8 = 0x40;
 
 pub const OUTPUT_STAP_AHEADER: u8 = 0x78;

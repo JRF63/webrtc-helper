@@ -56,7 +56,7 @@ impl EncoderBuilder for MockEncoderBuilder {
     fn build(
         self: Box<Self>,
         rtp_track: Arc<TrackLocalStaticRTP>,
-        _transceiver: Arc<RTCRtpTransceiver>,
+        transceiver: Arc<RTCRtpTransceiver>,
         mut ice_connection_state: IceConnectionState,
         bandwidth_estimate: TwccBandwidthEstimate,
         codec_capability: RTCRtpCodecCapability,
@@ -73,6 +73,14 @@ impl EncoderBuilder for MockEncoderBuilder {
         let mut ice_connection_state_clone = ice_connection_state.clone();
 
         let handle = tokio::runtime::Handle::current();
+        handle.spawn(async move {
+            if let Some(sender) = transceiver.sender().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 1500];
+                    while let Ok((_, _)) = sender.read(&mut buf).await {}
+                });
+            }
+        });
 
         handle.spawn(async move {
             // Wait for connection before logging bandwidth

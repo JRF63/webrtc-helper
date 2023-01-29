@@ -12,7 +12,6 @@ use webrtc::{
     api::{
         interceptor_registry::{
             configure_nack, configure_rtcp_reports, configure_twcc, configure_twcc_receiver_only,
-            configure_twcc_sender_only,
         },
         media_engine::MediaEngine,
         setting_engine::SettingEngine,
@@ -422,18 +421,11 @@ where
         has_decoder: bool,
     ) -> Result<(Registry, Option<TwccBandwidthEstimate>), webrtc::Error> {
         match (has_encoder, has_decoder) {
-            // Has both sender and receiver
-            (true, true) => {
+            // Has a sender
+            (true, _) => {
                 let (registry, bandwidth_estimate) =
                     configure_custom_twcc_sender(registry, init_bandwidth)?;
                 let registry = configure_twcc(registry, media_engine)?;
-                Ok((registry, Some(bandwidth_estimate)))
-            }
-            // Only sender
-            (true, false) => {
-                let (registry, bandwidth_estimate) =
-                    configure_custom_twcc_sender(registry, init_bandwidth)?;
-                let registry = configure_twcc_sender_only(registry, media_engine)?;
                 Ok((registry, Some(bandwidth_estimate)))
             }
             // Only receiver
