@@ -26,6 +26,7 @@ pub enum H264PayloadReaderError<'a> {
 
 impl<'a> H264PayloadReader<'a> {
     /// Create a new `H264PayloadReader`.
+    #[inline]
     pub fn new(buffer: &'a mut [u8]) -> H264PayloadReader<'a> {
         let buf_start = buffer.as_mut_ptr();
         H264PayloadReader {
@@ -83,6 +84,7 @@ impl<'a> H264PayloadReader<'a> {
     /// Reads a payload into the buffer. This method returns the number of bytes written to the
     /// original buffer upon success, indicating one or more NALU has been successfully written to
     /// the buffer.
+    #[inline]
     pub fn read_payload(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
         if payload.len() <= 2 {
             return Err(H264PayloadReaderError::ErrShortPacket);

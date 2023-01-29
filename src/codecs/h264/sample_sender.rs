@@ -269,6 +269,7 @@ impl H264SampleSender {
         Ok(())
     }
 
+    #[inline]
     async fn emit<T>(
         &mut self,
         header: &mut Header,
@@ -316,6 +317,7 @@ impl H264SampleSender {
     }
 
     /// Payload fragments a H264 packet across one or more byte arrays
+    #[inline]
     pub async fn send_payload<T>(
         &mut self,
         mtu: usize,
