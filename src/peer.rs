@@ -385,7 +385,7 @@ where
                 match msg {
                     Message::Sdp(sdp) => {
                         let sdp_type = sdp.sdp_type;
-                        
+
                         if role == Role::Offerer
                             && sdp_type == RTCSdpType::Offer
                             && peer.pc.signaling_state() != RTCSignalingState::Stable

@@ -1,11 +1,12 @@
 //! Modifed from the `Depacketizer` impl of [webrtc::rtp::codecs::h264::H264Packet].
 
 use super::constants::*;
+use crate::util::reorder_buffer::{PayloadReader, PayloadReaderOutput};
 use bytes::BufMut;
 
 /// `H264PayloadReader` reads payloads from RTP packets and produces NAL units.
 pub struct H264PayloadReader<'a> {
-    buffer: &'a mut [u8],
+    output: &'a mut [u8],
     is_aggregating: bool,
     init_addr: usize,
 }
@@ -15,77 +16,34 @@ pub struct H264PayloadReader<'a> {
 /// Essentially a subset of [webrtc::rtp::Error]. The addition of `NeedMoreInput` is used to signal
 /// incomplete parsing of FU-A fragmented packets and must be handled by feeding more data to
 /// depacketize.
-pub enum H264PayloadReaderError<'a> {
+pub enum H264PayloadReaderError {
     ErrShortPacket,
     StapASizeLargerThanBuffer,
     NaluTypeIsNotHandled,
     AggregationInterrupted,
     MissedAggregateStart,
-    NeedMoreInput(H264PayloadReader<'a>),
 }
 
-impl<'a> H264PayloadReader<'a> {
-    /// Create a new `H264PayloadReader`.
+impl<'a> PayloadReader for H264PayloadReader<'a> {
+    type Reader<'b> = H264PayloadReader<'b>;
+    type Error = H264PayloadReaderError;
+
     #[inline]
-    pub fn new(buffer: &'a mut [u8]) -> H264PayloadReader<'a> {
-        let buf_start = buffer.as_mut_ptr();
+    fn new_reader<'b>(output: &'b mut [u8]) -> H264PayloadReader<'b> {
+        let buf_start = output.as_mut_ptr();
         H264PayloadReader {
             // The original mut slice should still be untouched by the put* operations
-            buffer,
+            output,
             is_aggregating: false,
             init_addr: buf_start as usize,
         }
-    }
-
-    #[inline(always)]
-    fn num_bytes_written(&self) -> usize {
-        self.buffer.as_ptr() as usize - self.init_addr
-    }
-
-    #[cold]
-    fn single_nalu(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
-        if self.is_aggregating {
-            return Err(H264PayloadReaderError::AggregationInterrupted);
-        }
-        self.buffer.put(ANNEXB_NALUSTART_CODE);
-        self.buffer.put(payload);
-        Ok(self.num_bytes_written())
-    }
-
-    #[cold]
-    fn stapa_nalu(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
-        if self.is_aggregating {
-            return Err(H264PayloadReaderError::AggregationInterrupted);
-        }
-        let mut curr_offset = STAPA_HEADER_SIZE;
-        while curr_offset < payload.len() {
-            let nalu_size =
-                ((payload[curr_offset] as usize) << 8) | payload[curr_offset + 1] as usize;
-            curr_offset += STAPA_NALU_LENGTH_SIZE;
-
-            if payload.len() < curr_offset + nalu_size {
-                return Err(H264PayloadReaderError::StapASizeLargerThanBuffer);
-            }
-
-            self.buffer.put(ANNEXB_NALUSTART_CODE);
-            self.buffer
-                .put(&payload[curr_offset..curr_offset + nalu_size]);
-            curr_offset += nalu_size;
-        }
-
-        Ok(self.num_bytes_written())
-    }
-
-    #[cold]
-    fn other_nalu(self, _payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
-        Err(H264PayloadReaderError::NaluTypeIsNotHandled)
     }
 
     /// Reads a payload into the buffer. This method returns the number of bytes written to the
     /// original buffer upon success, indicating one or more NALU has been successfully written to
     /// the buffer.
     #[inline]
-    pub fn read_payload(mut self, payload: &[u8]) -> Result<usize, H264PayloadReaderError<'a>> {
+    fn read_payload(mut self, payload: &[u8]) -> Result<PayloadReaderOutput<Self>, Self::Error> {
         if payload.len() <= 2 {
             return Err(H264PayloadReaderError::ErrShortPacket);
         }
@@ -121,24 +79,91 @@ impl<'a> H264PayloadReader<'a> {
                         let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
                         let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
 
-                        self.buffer.put(ANNEXB_NALUSTART_CODE);
-                        self.buffer.put_u8(nalu_ref_idc | fragmented_nalu_type);
+                        self.output.put(ANNEXB_NALUSTART_CODE);
+                        self.output.put_u8(nalu_ref_idc | fragmented_nalu_type);
                     } else {
                         return Err(H264PayloadReaderError::MissedAggregateStart);
                     }
                 }
 
                 // Skip first 2 bytes then add to buffer
-                self.buffer.put(&payload[FUA_HEADER_SIZE..]);
+                self.output.put(&payload[FUA_HEADER_SIZE..]);
 
                 if b1 & FU_END_BITMASK != 0 {
-                    Ok(self.num_bytes_written())
+                    Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
                 } else {
-                    Err(H264PayloadReaderError::NeedMoreInput(self))
+                    Ok(PayloadReaderOutput::NeedMoreInput(self))
                 }
             }
             _ => H264PayloadReader::other_nalu(self, payload),
         }
+    }
+}
+
+impl<'a> H264PayloadReader<'a> {
+    /// Create a new `H264PayloadReader`.
+    #[inline]
+    pub fn new(buffer: &'a mut [u8]) -> H264PayloadReader<'a> {
+        let buf_start = buffer.as_mut_ptr();
+        H264PayloadReader {
+            // The original mut slice should still be untouched by the put* operations
+            output: buffer,
+            is_aggregating: false,
+            init_addr: buf_start as usize,
+        }
+    }
+
+    #[inline(always)]
+    fn num_bytes_written(&self) -> usize {
+        self.output.as_ptr() as usize - self.init_addr
+    }
+
+    #[cold]
+    fn single_nalu(
+        mut self,
+        payload: &[u8],
+    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+        if self.is_aggregating {
+            return Err(H264PayloadReaderError::AggregationInterrupted);
+        }
+        self.output.put(ANNEXB_NALUSTART_CODE);
+        self.output.put(payload);
+        Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+    }
+
+    #[cold]
+    fn stapa_nalu(
+        mut self,
+        payload: &[u8],
+    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+        if self.is_aggregating {
+            return Err(H264PayloadReaderError::AggregationInterrupted);
+        }
+        let mut curr_offset = STAPA_HEADER_SIZE;
+        while curr_offset < payload.len() {
+            let nalu_size =
+                ((payload[curr_offset] as usize) << 8) | payload[curr_offset + 1] as usize;
+            curr_offset += STAPA_NALU_LENGTH_SIZE;
+
+            if payload.len() < curr_offset + nalu_size {
+                return Err(H264PayloadReaderError::StapASizeLargerThanBuffer);
+            }
+
+            self.output.put(ANNEXB_NALUSTART_CODE);
+            self.output
+                .put(&payload[curr_offset..curr_offset + nalu_size]);
+            curr_offset += nalu_size;
+        }
+
+        Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+    }
+
+    #[cold]
+    fn other_nalu(
+        self,
+        _payload: &[u8],
+    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+        Err(H264PayloadReaderError::NaluTypeIsNotHandled)
     }
 }
 
@@ -162,11 +187,11 @@ mod tests {
         let mut bytes_written = None;
         for payload in payloads {
             match reader.read_payload(&payload) {
-                Ok(n) => {
+                Ok(PayloadReaderOutput::BytesWritten(n)) => {
                     bytes_written = Some(n);
                     break;
                 }
-                Err(H264PayloadReaderError::NeedMoreInput(r)) => reader = r,
+                Ok(PayloadReaderOutput::NeedMoreInput(r)) => reader = r,
                 Err(_) => panic!("Error processing payloads"),
             }
         }
