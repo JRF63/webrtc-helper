@@ -105,6 +105,15 @@ impl ReorderBuffer {
     where
         T: PayloadReader<'a>,
     {
+        if !self.packets.is_empty() {
+            match self.process_saved_packets::<T>(reader) {
+                Err(ReorderBufferError::NoMoreSavedPackets) => (),
+                res => {
+                    return res;
+                }
+            }
+        }
+
         debug_assert!(!self.buffers.is_empty());
         let mut buffer = self.buffers.pop().unwrap(); // Should not panic
 
@@ -381,17 +390,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reorder_buffer_test() {
-        const START: u16 = 0;
-        const N: u16 = 256;
+    async fn reorder_buffer_inorder_test() {
+        const START: u16 = 65500;
+        const N: u16 = 10000;
         let mut packets = VecDeque::with_capacity(N as usize);
         for offset in 0..N {
-            let i = START.wrapping_add(offset);
+            let sn = START.wrapping_add(offset);
             let mut payload = BytesMut::new();
-            payload.put_u16(i);
+            payload.put_u16(sn);
             let packet = Packet {
                 header: Header {
-                    sequence_number: i,
+                    sequence_number: sn,
                     ..Default::default()
                 },
                 payload: payload.freeze(),
@@ -405,11 +414,55 @@ mod tests {
         let mut output = vec![0u8; MAX_MTU];
         let mut reader = DummyPayloadReader::new_reader(&mut output);
         for offset in 0..N {
-            let i = START.wrapping_add(offset);
+            let sn = START.wrapping_add(offset);
             let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
             std::mem::drop(reader);
             let mut b = &output[..n];
-            assert_eq!(i, b.get_u16());
+            assert_eq!(sn, b.get_u16());
+            reader = DummyPayloadReader::new_reader(&mut output);
+        }
+    }
+
+    #[tokio::test]
+    async fn reorder_buffer_simple_out_of_order_test() {
+        const START: u16 = 65500;
+        const N: u16 = u16::MAX;
+        let mut seqnums = Vec::new();
+        for offset in 0..N {
+            let sn = START.wrapping_add(offset);
+            seqnums.push(sn);
+        }
+
+        // Scramble seqnums, leaving index 0 alone
+        for i in (2..seqnums.len()).step_by(2) {
+            seqnums.swap(i, i - 1);
+        }
+
+        let mut packets = VecDeque::with_capacity(N as usize);
+        for sn in seqnums {
+            let mut payload = BytesMut::new();
+            payload.put_u16(sn);
+            let packet = Packet {
+                header: Header {
+                    sequence_number: sn,
+                    ..Default::default()
+                },
+                payload: payload.freeze(),
+            };
+            packets.push_back(packet.marshal().unwrap())
+        }
+
+        let track = DummyTrackRemote::new(packets);
+        let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
+
+        let mut output = vec![0u8; MAX_MTU];
+        let mut reader = DummyPayloadReader::new_reader(&mut output);
+        for offset in 0..N {
+            let sn = START.wrapping_add(offset);
+            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
+            std::mem::drop(reader);
+            let mut b = &output[..n];
+            assert_eq!(sn, b.get_u16());
             reader = DummyPayloadReader::new_reader(&mut output);
         }
     }
