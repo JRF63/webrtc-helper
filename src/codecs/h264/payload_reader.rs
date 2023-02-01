@@ -8,7 +8,7 @@ use bytes::BufMut;
 pub struct H264PayloadReader<'a> {
     output: &'a mut [u8],
     is_aggregating: bool,
-    init_addr: usize,
+    buf_start: *mut u8,
 }
 
 /// Errors that `H264PayloadReader::read` can return.
@@ -24,26 +24,37 @@ pub enum H264PayloadReaderError {
     MissedAggregateStart,
 }
 
-impl<'a> PayloadReader for H264PayloadReader<'a> {
-    type Reader<'b> = H264PayloadReader<'b>;
+impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
     type Error = H264PayloadReaderError;
 
     #[inline]
-    fn new_reader<'b>(output: &'b mut [u8]) -> H264PayloadReader<'b> {
+    fn new_reader(output: &'a mut [u8]) -> H264PayloadReader<'a> {
         let buf_start = output.as_mut_ptr();
         H264PayloadReader {
             // The original mut slice should still be untouched by the put* operations
             output,
             is_aggregating: false,
-            init_addr: buf_start as usize,
+            buf_start,
         }
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        let num_bytes_written = self.num_bytes_written();
+        // SAFETY:
+        // `self.buf_start` is the original pointer of the buffer before `BufMut` started moving it
+        // forward. Likewise, the calculated length is the original length of the buffer before the
+        // `put*` operations.
+        self.output = unsafe {
+            std::slice::from_raw_parts_mut(self.buf_start, self.output.len() + num_bytes_written)
+        };
     }
 
     /// Reads a payload into the buffer. This method returns the number of bytes written to the
     /// original buffer upon success, indicating one or more NALU has been successfully written to
     /// the buffer.
     #[inline]
-    fn read_payload(mut self, payload: &[u8]) -> Result<PayloadReaderOutput<Self>, Self::Error> {
+    fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error> {
         if payload.len() <= 2 {
             return Err(H264PayloadReaderError::ErrShortPacket);
         }
@@ -92,7 +103,7 @@ impl<'a> PayloadReader for H264PayloadReader<'a> {
                 if b1 & FU_END_BITMASK != 0 {
                     Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
                 } else {
-                    Ok(PayloadReaderOutput::NeedMoreInput(self))
+                    Ok(PayloadReaderOutput::NeedMoreInput)
                 }
             }
             _ => H264PayloadReader::other_nalu(self, payload),
@@ -101,28 +112,16 @@ impl<'a> PayloadReader for H264PayloadReader<'a> {
 }
 
 impl<'a> H264PayloadReader<'a> {
-    /// Create a new `H264PayloadReader`.
-    #[inline]
-    pub fn new(buffer: &'a mut [u8]) -> H264PayloadReader<'a> {
-        let buf_start = buffer.as_mut_ptr();
-        H264PayloadReader {
-            // The original mut slice should still be untouched by the put* operations
-            output: buffer,
-            is_aggregating: false,
-            init_addr: buf_start as usize,
-        }
-    }
-
     #[inline(always)]
     fn num_bytes_written(&self) -> usize {
-        self.output.as_ptr() as usize - self.init_addr
+        self.output.as_ptr() as usize - self.buf_start as usize
     }
 
     #[cold]
     fn single_nalu(
-        mut self,
+        &mut self,
         payload: &[u8],
-    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+    ) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
         if self.is_aggregating {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
@@ -133,9 +132,9 @@ impl<'a> H264PayloadReader<'a> {
 
     #[cold]
     fn stapa_nalu(
-        mut self,
+        &mut self,
         payload: &[u8],
-    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+    ) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
         if self.is_aggregating {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
@@ -159,10 +158,7 @@ impl<'a> H264PayloadReader<'a> {
     }
 
     #[cold]
-    fn other_nalu(
-        self,
-        _payload: &[u8],
-    ) -> Result<PayloadReaderOutput<H264PayloadReader<'a>>, H264PayloadReaderError> {
+    fn other_nalu(&self, _payload: &[u8]) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
         Err(H264PayloadReaderError::NaluTypeIsNotHandled)
     }
 }
@@ -183,15 +179,15 @@ mod tests {
             .unwrap();
 
         let mut output = vec![0u8; TEST_NALU.len()];
-        let mut reader = H264PayloadReader::new(&mut output);
+        let mut reader = H264PayloadReader::new_reader(&mut output);
         let mut bytes_written = None;
         for payload in payloads {
-            match reader.read_payload(&payload) {
+            match reader.push_payload(&payload) {
                 Ok(PayloadReaderOutput::BytesWritten(n)) => {
                     bytes_written = Some(n);
                     break;
                 }
-                Ok(PayloadReaderOutput::NeedMoreInput(r)) => reader = r,
+                Ok(PayloadReaderOutput::NeedMoreInput) => continue,
                 Err(_) => panic!("Error processing payloads"),
             }
         }

@@ -56,9 +56,9 @@ impl ReorderBuffer {
         }
     }
 
-    fn process_saved_packets<T>(&mut self, output: &mut [u8]) -> Result<usize, ReorderBufferError>
+    fn process_saved_packets<'a, T>(&mut self, reader: &mut T) -> Result<usize, ReorderBufferError>
     where
-        T: PayloadReader,
+        T: PayloadReader<'a>,
     {
         if self.delta_offset > u16::MAX / 2 {
             // Recreate `BTreeMap`
@@ -69,8 +69,6 @@ impl ReorderBuffer {
                 self.packets.insert(delta, packet);
             }
         }
-
-        let mut reader = T::new_reader(output);
 
         while !self.packets.is_empty() {
             let first_seq_num = {
@@ -103,11 +101,11 @@ impl ReorderBuffer {
                 return Err(ReorderBufferError::HeaderParsingError);
             };
 
-            match reader.read_payload(b) {
+            match reader.push_payload(b) {
                 Ok(PayloadReaderOutput::BytesWritten(n)) => {
                     return Ok(n); // TODO: return the n bytes written
                 }
-                Ok(PayloadReaderOutput::NeedMoreInput(r)) => reader = r,
+                Ok(PayloadReaderOutput::NeedMoreInput) => continue,
                 Err(_) => {
                     return Err(ReorderBufferError::PayloadReaderError);
                 }
@@ -116,29 +114,26 @@ impl ReorderBuffer {
         Err(ReorderBufferError::NoMoreSavedPackets)
     }
 
-    pub async fn dummy_read<T>(&mut self, output: &mut [u8]) -> Result<usize, ReorderBufferError>
+    pub async fn dummy_read<'a, T>(&mut self, reader: &mut T) -> Result<usize, ReorderBufferError>
     where
-        T: PayloadReader,
+        T: PayloadReader<'a>,
     {
         debug_assert!(!self.buffers.is_empty());
         let mut buffer = self.buffers.pop().unwrap(); // Should not panic
-        let mut reader = T::new_reader(output);
 
         loop {
             match timeout(READ_TIMEOUT, self.track.read(&mut *buffer)).await {
                 Err(_) => {
                     // Retry in case of timeout
                     log::error!("Timed-out while reading from `TrackRemote`");
-                    std::mem::drop(reader);
-                    reader = T::new_reader(output);
+                    reader.reset();
                     continue;
                 }
                 Ok(read_result) => match read_result {
                     Err(_) => {
                         // Also retry if there is a read error
                         log::error!("Read error while reading from `TrackRemote`");
-                        std::mem::drop(reader);
-                        reader = T::new_reader(output);
+                        reader.reset();
                         continue; // TODO: Signal to caller to possibly call PLI
                     }
                     Ok((len, _)) => {
@@ -166,7 +161,7 @@ impl ReorderBuffer {
                                 ) {
                                     self.buffers.push(packet.buffer);
                                 }
-                                match self.process_saved_packets::<T>(output) {
+                                match self.process_saved_packets::<T>(reader) {
                                     Err(ReorderBufferError::NoMoreSavedPackets) => {
                                         buffer = self.buffers.pop().unwrap(); // TODO: Possibly empty?
                                         continue;
@@ -189,14 +184,12 @@ impl ReorderBuffer {
                                     return Err(ReorderBufferError::HeaderParsingError);
                                 };
 
-                                match reader.read_payload(b) {
+                                match reader.push_payload(b) {
                                     Ok(PayloadReaderOutput::BytesWritten(n)) => {
                                         self.buffers.push(buffer);
                                         return Ok(n);
                                     }
-                                    Ok(PayloadReaderOutput::NeedMoreInput(r)) => {
-                                        std::mem::drop(reader);
-                                        reader = r;
+                                    Ok(PayloadReaderOutput::NeedMoreInput) => {
                                         continue;
                                     }
                                     Err(_) => {
@@ -246,21 +239,22 @@ pub struct RawPacket {
     len: usize,
 }
 
-pub enum PayloadReaderOutput<T> {
+pub enum PayloadReaderOutput {
     BytesWritten(usize),
-    NeedMoreInput(T),
+    NeedMoreInput,
 }
 
-pub trait PayloadReader
+pub trait PayloadReader<'a>
 where
     Self: Sized,
 {
-    type Reader<'a>: PayloadReader;
     type Error;
 
-    fn new_reader<'a>(output: &'a mut [u8]) -> Self::Reader<'a>;
+    fn new_reader(output: &'a mut [u8]) -> Self;
 
-    fn read_payload(self, payload: &[u8]) -> Result<PayloadReaderOutput<Self>, Self::Error>;
+    fn reset(&mut self);
+
+    fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error>;
 }
 
 fn unmarshal_header(buffer: &mut &[u8]) -> Option<rtp::header::Header> {
@@ -286,7 +280,7 @@ fn unmarshal_header(buffer: &mut &[u8]) -> Option<rtp::header::Header> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::{BufMut, Bytes, BytesMut};
+    use bytes::{BufMut, Buf, Bytes, BytesMut};
     use std::{
         collections::{HashMap, VecDeque},
         sync::Mutex,
@@ -333,53 +327,56 @@ mod tests {
         }
     }
 
-    // struct DummyPayloadReader<'a> {
-    //     output: &'a mut [u8],
-    // }
+    struct DummyPayloadReader<'a> {
+        output: &'a mut [u8],
+    }
 
-    // impl<'a> PayloadReader<'a> for DummyPayloadReader<'a> {
-    //     type Error = ();
+    impl<'a> PayloadReader<'a> for DummyPayloadReader<'a> {
+        type Error = ();
 
-    //     fn new_reader(output: &'a mut [u8]) -> Self {
-    //         Self { output }
-    //     }
+        fn new_reader(output: &'a mut [u8]) -> Self {
+            Self { output }
+        }
 
-    //     fn read_payload(self, payload: &[u8]) -> Result<PayloadReaderOutput<Self>, Self::Error> {
-    //         let min_len = usize::min(self.output.len(), payload.len());
-    //         self.output[..min_len].copy_from_slice(&payload[..min_len]);
-    //         Ok(PayloadReaderOutput::BytesWritten(min_len))
-    //     }
-    // }
+        fn reset(&mut self) {}
 
-    // #[tokio::test]
-    // async fn reorder_buffer_test() {
-    //     const START: u16 = 0;
-    //     const N: u16 = 256;
-    //     let mut packets = VecDeque::with_capacity(N as usize);
-    //     for offset in 0..N {
-    //         let i = START.wrapping_add(offset);
-    //         let mut payload = BytesMut::new();
-    //         payload.put_u16(i);
-    //         let packet = Packet {
-    //             header: Header {
-    //                 sequence_number: i,
-    //                 ..Default::default()
-    //             },
-    //             payload: payload.freeze(),
-    //         };
-    //         packets.push_back(packet.marshal().unwrap())
-    //     }
+        fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error> {
+            let min_len = usize::min(self.output.len(), payload.len());
+            self.output[..min_len].copy_from_slice(&payload[..min_len]);
+            Ok(PayloadReaderOutput::BytesWritten(min_len))
+        }
+    }
 
-    //     let track = DummyTrackRemote::new(packets);
-    //     let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
+    #[tokio::test]
+    async fn reorder_buffer_test() {
+        const START: u16 = 0;
+        const N: u16 = 256;
+        let mut packets = VecDeque::with_capacity(N as usize);
+        for offset in 0..N {
+            let i = START.wrapping_add(offset);
+            let mut payload = BytesMut::new();
+            payload.put_u16(i);
+            let packet = Packet {
+                header: Header {
+                    sequence_number: i,
+                    ..Default::default()
+                },
+                payload: payload.freeze(),
+            };
+            packets.push_back(packet.marshal().unwrap())
+        }
 
-    //     let mut output = vec![0u8; MAX_MTU];
-    //     for offset in 0..N {
-    //         let i = START.wrapping_add(offset);
-    //         let n = reorder_buffer
-    //             .dummy_read::<DummyPayloadReader>(&mut output)
-    //             .await
-    //             .unwrap();
-    //     }
-    // }
+        let track = DummyTrackRemote::new(packets);
+        let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
+
+        let mut output = vec![0u8; MAX_MTU];
+        let mut reader = DummyPayloadReader::new_reader(&mut output);
+        for offset in 0..N {
+            let i = START.wrapping_add(offset);
+            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
+            reader.reset();
+            let mut b = &reader.output[..n];
+            assert_eq!(i, b.get_u16());
+        }
+    }
 }
