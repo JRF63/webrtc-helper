@@ -13,12 +13,12 @@ type TrackRemote = webrtc::track::track_remote::TrackRemote;
 #[cfg(test)]
 type TrackRemote = dyn tests::DummyTrackRemoteTrait;
 
-type PacketBuffer = Box<[u8; MAX_MTU]>;
-
 #[derive(Debug)]
 pub enum ReorderBufferError {
     NoMoreSavedPackets,
     HeaderParsingError,
+    TrackRemoteReadTimeout,
+    TrackRemoteReadError,
     PayloadReaderError,
     PayloadTooShort,
     UnableToMaintainReorderBuffer,
@@ -35,7 +35,7 @@ pub struct ReorderBuffer {
 impl ReorderBuffer {
     pub fn new(track: Arc<TrackRemote>) -> ReorderBuffer {
         let buffers = (0..NUM_PACKETS_TO_BUFFER)
-            .map(|_| TryFrom::try_from(vec![0; MAX_MTU].into_boxed_slice()).unwrap())
+            .map(|_| PacketBuffer::new())
             .collect();
 
         ReorderBuffer {
@@ -115,32 +115,28 @@ impl ReorderBuffer {
         }
 
         debug_assert!(!self.buffers.is_empty());
-        let mut buffer = self.buffers.pop().unwrap(); // Should not panic
 
         loop {
-            match timeout(READ_TIMEOUT, self.track.read(&mut *buffer)).await {
+            // Should not panic
+            let track_read = timeout(
+                READ_TIMEOUT,
+                self.track.read(self.buffers.last_mut().unwrap()),
+            )
+            .await;
+            match track_read {
                 Err(_) => {
-                    // Retry in case of timeout
-                    log::error!("Timed-out while reading from `TrackRemote`");
-                    reader.reset();
-                    continue;
+                    return Err(ReorderBufferError::TrackRemoteReadTimeout);
                 }
                 Ok(read_result) => match read_result {
                     Err(_) => {
-                        // Also retry if there is a read error
-                        log::error!("Read error while reading from `TrackRemote`");
-                        reader.reset();
-                        continue; // TODO: Signal to caller to possibly call PLI
+                        return Err(ReorderBufferError::TrackRemoteReadError);
                     }
                     Ok((len, _)) => {
                         if len < 4 {
-                            self.buffers.push(buffer);
                             return Err(ReorderBufferError::PayloadTooShort);
                         }
 
-                        let packet = RawPacket { buffer, len };
-                        let sequence_number = packet.get_sequence_number();
-
+                        let sequence_number = self.buffers.last().unwrap().get_sequence_number();
                         if self.expected_seq_num.is_none() {
                             self.expected_seq_num = Some(sequence_number);
                         }
@@ -148,18 +144,20 @@ impl ReorderBuffer {
                         match sequence_number.cmp(&self.expected_seq_num.unwrap()) {
                             std::cmp::Ordering::Equal => {
                                 if !self.packets.is_empty() {
+                                    let packet = RawPacket {
+                                        buffer: self.buffers.pop().unwrap(),
+                                        len,
+                                    };
                                     if let Some(packet) =
                                         self.packets.insert(sequence_number, packet)
                                     {
                                         self.buffers.push(packet.buffer);
                                     }
-                                    buffer = self.buffers.pop().unwrap();
                                     match self.process_saved_packets::<T>(reader) {
                                         Err(ReorderBufferError::NoMoreSavedPackets) => {
                                             continue;
                                         }
                                         res => {
-                                            self.buffers.push(buffer);
                                             return res;
                                         }
                                     }
@@ -168,12 +166,7 @@ impl ReorderBuffer {
                                     self.expected_seq_num =
                                         Some(self.expected_seq_num.unwrap().next());
 
-                                    // Reuse the buffer, adding it to the last spot
-                                    self.buffers.push(packet.buffer);
-
-                                    let last = self.buffers.last().unwrap(); // Won't panic, we just pushed one
-
-                                    let mut b: &[u8] = &last[..len];
+                                    let mut b: &[u8] = &self.buffers.last().unwrap()[..len];
 
                                     // Unmarshaling the header would move `b` to point to the payload
                                     if unmarshal_header(&mut b).is_none() {
@@ -185,7 +178,6 @@ impl ReorderBuffer {
                                             return Ok(n);
                                         }
                                         Ok(PayloadReaderOutput::NeedMoreInput) => {
-                                            buffer = self.buffers.pop().unwrap();
                                             continue;
                                         }
                                         Err(_) => {
@@ -197,15 +189,21 @@ impl ReorderBuffer {
 
                             std::cmp::Ordering::Greater => {
                                 if !self.buffers.is_empty() {
+                                    let packet = RawPacket {
+                                        buffer: self.buffers.pop().unwrap(),
+                                        len,
+                                    };
                                     if let Some(packet) =
                                         self.packets.insert(sequence_number, packet)
                                     {
                                         self.buffers.push(packet.buffer);
                                     }
-                                    buffer = self.buffers.pop().unwrap();
                                     continue;
                                 } else {
-                                    // No more empty buffers
+                                    let packet = RawPacket {
+                                        buffer: self.buffers.pop().unwrap(),
+                                        len,
+                                    };
                                     self.reclaim_buffers();
                                     self.expected_seq_num = Some(sequence_number);
                                     self.packets.insert(sequence_number, packet);
@@ -269,16 +267,36 @@ impl Ord for SequenceNumber {
     }
 }
 
+struct PacketBuffer(Box<[u8; MAX_MTU]>);
+
+impl std::ops::Deref for PacketBuffer {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        <[u8; MAX_MTU]>::as_slice(&self.0)
+    }
+}
+
+impl std::ops::DerefMut for PacketBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        <[u8; MAX_MTU]>::as_mut_slice(&mut self.0)
+    }
+}
+
+impl PacketBuffer {
+    fn new() -> PacketBuffer {
+        PacketBuffer(TryFrom::try_from(vec![0; MAX_MTU].into_boxed_slice()).unwrap())
+    }
+
+    fn get_sequence_number(&self) -> SequenceNumber {
+        let mut tmp: &[u8] = &self;
+        SequenceNumber(tmp.get_u32() as u16)
+    }
+}
+
 pub struct RawPacket {
     buffer: PacketBuffer,
     len: usize,
-}
-
-impl RawPacket {
-    fn get_sequence_number(&self) -> SequenceNumber {
-        let mut tmp: &[u8] = &self.buffer[..];
-        SequenceNumber(tmp.get_u32() as u16)
-    }
 }
 
 pub enum PayloadReaderOutput {
