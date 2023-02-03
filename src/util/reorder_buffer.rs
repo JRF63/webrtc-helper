@@ -21,6 +21,7 @@ pub enum ReorderBufferError {
     TrackRemoteReadError,
     PayloadReaderError,
     PayloadTooShort,
+    BufferFull,
     UnableToMaintainReorderBuffer,
     UninitializedSequenceNumber,
 }
@@ -43,12 +44,6 @@ impl ReorderBuffer {
             expected_seq_num: None,
             packets: BTreeMap::new(),
             buffers,
-        }
-    }
-
-    fn reclaim_buffers(&mut self) {
-        while let Some((_, packet)) = self.packets.pop_first() {
-            self.buffers.push(packet.buffer);
         }
     }
 
@@ -114,15 +109,22 @@ impl ReorderBuffer {
             }
         }
 
-        debug_assert!(!self.buffers.is_empty());
-
         loop {
-            // Should not panic
-            let track_read = timeout(
-                READ_TIMEOUT,
-                self.track.read(self.buffers.last_mut().unwrap()),
-            )
-            .await;
+            let last_buffer = match self.buffers.last_mut() {
+                Some(b) => b,
+                None => {
+                    let first_seq_num = {
+                        // Unwrap should not panic since `self.buffers.is_empty()` implies
+                        // `!self.packets.is_empty()`
+                        let entry = self.packets.first_entry().unwrap();
+                        *entry.key()
+                    };
+                    self.expected_seq_num = Some(first_seq_num);
+                    return Err(ReorderBufferError::BufferFull);
+                }
+            };
+
+            let track_read = timeout(READ_TIMEOUT, self.track.read(last_buffer)).await;
             match track_read {
                 Err(_) => {
                     return Err(ReorderBufferError::TrackRemoteReadTimeout);
@@ -188,28 +190,14 @@ impl ReorderBuffer {
                             }
 
                             std::cmp::Ordering::Greater => {
-                                if !self.buffers.is_empty() {
-                                    let packet = RawPacket {
-                                        buffer: self.buffers.pop().unwrap(),
-                                        len,
-                                    };
-                                    if let Some(packet) =
-                                        self.packets.insert(sequence_number, packet)
-                                    {
-                                        self.buffers.push(packet.buffer);
-                                    }
-                                    continue;
-                                } else {
-                                    let packet = RawPacket {
-                                        buffer: self.buffers.pop().unwrap(),
-                                        len,
-                                    };
-                                    self.reclaim_buffers();
-                                    self.expected_seq_num = Some(sequence_number);
-                                    self.packets.insert(sequence_number, packet);
-
-                                    return Err(ReorderBufferError::UnableToMaintainReorderBuffer);
+                                let packet = RawPacket {
+                                    buffer: self.buffers.pop().unwrap(),
+                                    len,
+                                };
+                                if let Some(packet) = self.packets.insert(sequence_number, packet) {
+                                    self.buffers.push(packet.buffer);
                                 }
+                                continue;
                             }
                             std::cmp::Ordering::Less => {
                                 return Err(ReorderBufferError::UnableToMaintainReorderBuffer)
@@ -223,7 +211,7 @@ impl ReorderBuffer {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SequenceNumber(u16);
 
 impl SequenceNumber {
@@ -407,81 +395,96 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sequence_number_sort() {
+        const START: u16 = 65500;
+        const N: u16 = 10000;
+        let mut seq_nums: Vec<_> = (0..N)
+            .map(|offset| SequenceNumber(START.wrapping_add(offset)))
+            .collect();
+        seq_nums.reverse();
+        seq_nums.sort();
+
+        for (offset, seq_num) in (0..N).zip(&seq_nums) {
+            let val = START.wrapping_add(offset);
+            assert_eq!(val, seq_num.0);
+        }
+    }
+
+    async fn reorder_buffer_test(mut seq_nums: Vec<SequenceNumber>) {
+        let packets: VecDeque<_> = seq_nums
+            .iter()
+            .map(|seq_num| {
+                let mut payload = BytesMut::new();
+                payload.put_u16(seq_num.0);
+                let packet = Packet {
+                    header: Header {
+                        sequence_number: seq_num.0,
+                        ..Default::default()
+                    },
+                    payload: payload.freeze(),
+                };
+                packet.marshal().unwrap()
+            })
+            .collect();
+
+        seq_nums.sort();
+
+        let track = DummyTrackRemote::new(packets.clone());
+        let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
+
+        let buf_len = reorder_buffer.buffers.len();
+
+        let mut output = vec![0u8; MAX_MTU];
+        let mut reader = DummyPayloadReader::new_reader(&mut output);
+
+        for seq_num in seq_nums {
+            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
+            std::mem::drop(reader);
+            let mut b = &output[..n];
+            assert_eq!(seq_num.0, b.get_u16());
+            reader = DummyPayloadReader::new_reader(&mut output);
+        }
+
+        assert_eq!(reorder_buffer.buffers.len(), buf_len);
+    }
+
     #[tokio::test]
     async fn reorder_buffer_inorder_test() {
         const START: u16 = 65500;
         const N: u16 = 10000;
-        let mut packets = VecDeque::with_capacity(N as usize);
-        for offset in 0..N {
-            let sn = START.wrapping_add(offset);
-            let mut payload = BytesMut::new();
-            payload.put_u16(sn);
-            let packet = Packet {
-                header: Header {
-                    sequence_number: sn,
-                    ..Default::default()
-                },
-                payload: payload.freeze(),
-            };
-            packets.push_back(packet.marshal().unwrap())
-        }
-
-        let track = DummyTrackRemote::new(packets);
-        let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
-
-        let mut output = vec![0u8; MAX_MTU];
-        let mut reader = DummyPayloadReader::new_reader(&mut output);
-        for offset in 0..N {
-            let sn = START.wrapping_add(offset);
-            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
-            std::mem::drop(reader);
-            let mut b = &output[..n];
-            assert_eq!(sn, b.get_u16());
-            reader = DummyPayloadReader::new_reader(&mut output);
-        }
+        let seq_nums: Vec<_> = (0..N)
+            .map(|offset| SequenceNumber(START.wrapping_add(offset)))
+            .collect();
+        reorder_buffer_test(seq_nums).await;
     }
 
     #[tokio::test]
     async fn reorder_buffer_simple_out_of_order_test() {
         const START: u16 = 65500;
-        const N: u16 = u16::MAX;
-        let mut seqnums = Vec::new();
-        for offset in 0..N {
-            let sn = START.wrapping_add(offset);
-            seqnums.push(sn);
+        const N: u16 = 10000;
+        let mut seq_nums: Vec<_> = (0..N)
+            .map(|offset| SequenceNumber(START.wrapping_add(offset)))
+            .collect();
+
+        // Scramble seq_nums, leaving index 0 alone
+        for i in (2..seq_nums.len()).step_by(2) {
+            seq_nums.swap(i, i - 1);
         }
 
-        // Scramble seqnums, leaving index 0 alone
-        for i in (2..seqnums.len()).step_by(2) {
-            seqnums.swap(i, i - 1);
-        }
+        reorder_buffer_test(seq_nums).await;
+    }
 
-        let mut packets = VecDeque::with_capacity(N as usize);
-        for sn in seqnums {
-            let mut payload = BytesMut::new();
-            payload.put_u16(sn);
-            let packet = Packet {
-                header: Header {
-                    sequence_number: sn,
-                    ..Default::default()
-                },
-                payload: payload.freeze(),
-            };
-            packets.push_back(packet.marshal().unwrap())
-        }
+    #[tokio::test]
+    async fn reorder_buffer_large_window() {
+        const START: u16 = 65500;
+        const N: u16 = 10000;
+        let mut seq_nums: Vec<_> = (0..N)
+            .map(|offset| SequenceNumber(START.wrapping_add(offset)))
+            .collect();
 
-        let track = DummyTrackRemote::new(packets);
-        let mut reorder_buffer = ReorderBuffer::new(Arc::new(track));
+        seq_nums.swap(1, NUM_PACKETS_TO_BUFFER as usize);
 
-        let mut output = vec![0u8; MAX_MTU];
-        let mut reader = DummyPayloadReader::new_reader(&mut output);
-        for offset in 0..N {
-            let sn = START.wrapping_add(offset);
-            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
-            std::mem::drop(reader);
-            let mut b = &output[..n];
-            assert_eq!(sn, b.get_u16());
-            reader = DummyPayloadReader::new_reader(&mut output);
-        }
+        reorder_buffer_test(seq_nums).await;
     }
 }
