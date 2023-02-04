@@ -96,7 +96,7 @@ impl ReorderBuffer {
         Err(ReorderBufferError::NoMoreSavedPackets)
     }
 
-    pub async fn dummy_read<'a, T>(&mut self, reader: &mut T) -> Result<usize, ReorderBufferError>
+    pub async fn read_from_track<'a, T>(&mut self, reader: &mut T) -> Result<usize, ReorderBufferError>
     where
         T: PayloadReader<'a>,
     {
@@ -439,7 +439,7 @@ mod tests {
         let mut reader = DummyPayloadReader::new_reader(&mut output);
 
         for seq_num in seq_nums {
-            let n = reorder_buffer.dummy_read(&mut reader).await.unwrap();
+            let n = reorder_buffer.read_from_track(&mut reader).await.unwrap();
             std::mem::drop(reader);
             let mut b = &output[..n];
             assert_eq!(seq_num.0, b.get_u16());
