@@ -56,7 +56,7 @@ impl H264Profile {
     pub fn from_str(src: &str) -> Result<H264Profile, ()> {
         let bytes = src.as_bytes();
         let idc_str = std::str::from_utf8(&bytes[..2]).map_err(|_| ())?;
-        let iop_str = std::str::from_utf8(&bytes[2..]).map_err(|_| ())?;
+        let iop_str = std::str::from_utf8(&bytes[2..4]).map_err(|_| ())?;
         let idc = u8::from_str_radix(idc_str, 16).map_err(|_| ())?;
         let iop = u8::from_str_radix(iop_str, 16).map_err(|_| ())?;
 
