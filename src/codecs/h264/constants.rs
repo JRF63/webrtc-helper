@@ -17,4 +17,4 @@ pub const FU_END_BITMASK: u8 = 0x40;
 
 pub const OUTPUT_STAP_AHEADER: u8 = 0x78;
 
-pub static ANNEXB_NALUSTART_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
+pub static ANNEXB_NALUSTART_CODE: &[u8; 4] = &[0x00, 0x00, 0x00, 0x01];

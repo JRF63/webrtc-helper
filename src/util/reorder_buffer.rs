@@ -96,7 +96,10 @@ impl ReorderBuffer {
         Err(ReorderBufferError::NoMoreSavedPackets)
     }
 
-    pub async fn read_from_track<'a, T>(&mut self, reader: &mut T) -> Result<usize, ReorderBufferError>
+    pub async fn read_from_track<'a, T>(
+        &mut self,
+        reader: &mut T,
+    ) -> Result<usize, ReorderBufferError>
     where
         T: PayloadReader<'a>,
     {
@@ -300,8 +303,6 @@ where
 
     fn new_reader(output: &'a mut [u8]) -> Self;
 
-    fn reset(&mut self);
-
     fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error>;
 }
 
@@ -385,8 +386,6 @@ mod tests {
         fn new_reader(output: &'a mut [u8]) -> Self {
             Self { output }
         }
-
-        fn reset(&mut self) {}
 
         fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error> {
             let min_len = usize::min(self.output.len(), payload.len());

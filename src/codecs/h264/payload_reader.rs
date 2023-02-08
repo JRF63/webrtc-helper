@@ -2,23 +2,17 @@
 
 use super::constants::*;
 use crate::util::reorder_buffer::{PayloadReader, PayloadReaderOutput};
-use bytes::BufMut;
 
 /// `H264PayloadReader` reads payloads from RTP packets and produces NAL units.
 pub struct H264PayloadReader<'a> {
-    output: &'a mut [u8],
+    buf_mut: UnsafeBufMut<'a>,
     is_aggregating: bool,
-    buf_start: *mut u8,
 }
 
 /// Errors that `H264PayloadReader::read` can return.
-///
-/// Essentially a subset of [webrtc::rtp::Error]. The addition of `NeedMoreInput` is used to signal
-/// incomplete parsing of FU-A fragmented packets and must be handled by feeding more data to
-/// depacketize.
 pub enum H264PayloadReaderError {
-    ErrShortPacket,
-    StapASizeLargerThanBuffer,
+    PayloadTooShort,
+    OutputBufferFull,
     NaluTypeIsNotHandled,
     AggregationInterrupted,
     MissedAggregateStart,
@@ -29,25 +23,10 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
 
     #[inline]
     fn new_reader(output: &'a mut [u8]) -> H264PayloadReader<'a> {
-        let buf_start = output.as_mut_ptr();
         H264PayloadReader {
-            // The original mut slice should still be untouched by the put* operations
-            output,
+            buf_mut: UnsafeBufMut::new(output),
             is_aggregating: false,
-            buf_start,
         }
-    }
-
-    #[inline]
-    fn reset(&mut self) {
-        let num_bytes_written = self.num_bytes_written();
-        // SAFETY:
-        // `self.buf_start` is the original pointer of the buffer before `BufMut` started moving it
-        // forward. Likewise, the calculated length is the original length of the buffer before the
-        // `put*` operations.
-        self.output = unsafe {
-            std::slice::from_raw_parts_mut(self.buf_start, self.output.len() + num_bytes_written)
-        };
     }
 
     /// Reads a payload into the buffer. This method returns the number of bytes written to the
@@ -55,8 +34,8 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
     /// the buffer.
     #[inline]
     fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error> {
-        if payload.len() <= 2 {
-            return Err(H264PayloadReaderError::ErrShortPacket);
+        if payload.len() <= FUA_HEADER_SIZE {
+            return Err(H264PayloadReaderError::PayloadTooShort);
         }
 
         // NALU header
@@ -90,15 +69,30 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
                         let nalu_ref_idc = b0 & NALU_REF_IDC_BITMASK;
                         let fragmented_nalu_type = b1 & NALU_TYPE_BITMASK;
 
-                        self.output.put(ANNEXB_NALUSTART_CODE);
-                        self.output.put_u8(nalu_ref_idc | fragmented_nalu_type);
+                        if self.buf_mut.remaining_mut() >= ANNEXB_NALUSTART_CODE.len() + 1 {
+                            // SAFETY: Checked that the buffer has enough space
+                            unsafe {
+                                self.buf_mut.put_slice(ANNEXB_NALUSTART_CODE);
+                                self.buf_mut.put_u8(nalu_ref_idc | fragmented_nalu_type);
+                            }
+                        } else {
+                            return Err(H264PayloadReaderError::OutputBufferFull);
+                        }
                     } else {
                         return Err(H264PayloadReaderError::MissedAggregateStart);
                     }
                 }
 
-                // Skip first 2 bytes then add to buffer
-                self.output.put(&payload[FUA_HEADER_SIZE..]);
+                let partial_nalu = &payload[FUA_HEADER_SIZE..];
+                if self.buf_mut.remaining_mut() >= partial_nalu.len() {
+                    // SAFETY: Checked that the buffer has enough space
+                    unsafe {
+                        // Skip first 2 bytes then add to buffer
+                        self.buf_mut.put_slice(partial_nalu);
+                    }
+                } else {
+                    return Err(H264PayloadReaderError::OutputBufferFull);
+                }
 
                 if b1 & FU_END_BITMASK != 0 {
                     Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
@@ -114,7 +108,7 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
 impl<'a> H264PayloadReader<'a> {
     #[inline(always)]
     fn num_bytes_written(&self) -> usize {
-        self.output.as_ptr() as usize - self.buf_start as usize
+        self.buf_mut.num_bytes_written()
     }
 
     #[cold]
@@ -125,9 +119,16 @@ impl<'a> H264PayloadReader<'a> {
         if self.is_aggregating {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
-        self.output.put(ANNEXB_NALUSTART_CODE);
-        self.output.put(payload);
-        Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+        if self.buf_mut.remaining_mut() >= ANNEXB_NALUSTART_CODE.len() + payload.len() {
+            // SAFETY: Checked that the buffer has enough space
+            unsafe {
+                self.buf_mut.put_slice(ANNEXB_NALUSTART_CODE);
+                self.buf_mut.put_slice(payload);
+            }
+            Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+        } else {
+            Err(H264PayloadReaderError::OutputBufferFull)
+        }
     }
 
     #[cold]
@@ -139,18 +140,33 @@ impl<'a> H264PayloadReader<'a> {
             return Err(H264PayloadReaderError::AggregationInterrupted);
         }
         let mut curr_offset = STAPA_HEADER_SIZE;
+
         while curr_offset < payload.len() {
-            let nalu_size =
-                ((payload[curr_offset] as usize) << 8) | payload[curr_offset + 1] as usize;
+            // Get 2 bytes of the NALU size
+            let nalu_size_bytes = payload
+                .get(curr_offset..curr_offset + 2)
+                .ok_or(H264PayloadReaderError::PayloadTooShort)?;
+
+            // NALU size is a 16-bit unsigned integer in network byte order.
+            // The compiler should be able to deduce that `try_into().unwrap()` would not panic.
+            let nalu_size = u16::from_be_bytes(nalu_size_bytes.try_into().unwrap()) as usize;
+
             curr_offset += STAPA_NALU_LENGTH_SIZE;
 
-            if payload.len() < curr_offset + nalu_size {
-                return Err(H264PayloadReaderError::StapASizeLargerThanBuffer);
+            let nalu = payload
+                .get(curr_offset..curr_offset + nalu_size)
+                .ok_or(H264PayloadReaderError::PayloadTooShort)?;
+
+            if self.buf_mut.remaining_mut() >= ANNEXB_NALUSTART_CODE.len() + nalu.len() {
+                // SAFETY: Checked that the buffer has enough space
+                unsafe {
+                    self.buf_mut.put_slice(ANNEXB_NALUSTART_CODE);
+                    self.buf_mut.put_slice(nalu);
+                }
+            } else {
+                return Err(H264PayloadReaderError::OutputBufferFull);
             }
 
-            self.output.put(ANNEXB_NALUSTART_CODE);
-            self.output
-                .put(&payload[curr_offset..curr_offset + nalu_size]);
             curr_offset += nalu_size;
         }
 
@@ -163,6 +179,47 @@ impl<'a> H264PayloadReader<'a> {
     }
 }
 
+struct UnsafeBufMut<'a> {
+    buffer: &'a mut [u8],
+    index: usize,
+}
+
+impl<'a> UnsafeBufMut<'a> {
+    #[inline(always)]
+    fn new(buffer: &'a mut [u8]) -> UnsafeBufMut<'a> {
+        UnsafeBufMut { buffer, index: 0 }
+    }
+
+    // Same as `bytes::BufMut` but without length checks.
+    #[inline(always)]
+    unsafe fn put_slice(&mut self, src: &[u8]) {
+        let num_bytes = src.len();
+        std::ptr::copy_nonoverlapping(
+            src.as_ptr(),
+            self.buffer.get_unchecked_mut(self.index..).as_mut_ptr(),
+            num_bytes,
+        );
+        self.index = self.index.wrapping_add(num_bytes);
+    }
+
+    // Same as `bytes::BufMut` but directly inserts to the slice without checks.
+    #[inline(always)]
+    unsafe fn put_u8(&mut self, n: u8) {
+        *self.buffer.get_unchecked_mut(self.index) = n;
+        self.index += 1;
+    }
+
+    #[inline(always)]
+    fn remaining_mut(&self) -> usize {
+        self.buffer.len() - self.index
+    }
+
+    #[inline(always)]
+    fn num_bytes_written(&self) -> usize {
+        self.index
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +227,25 @@ mod tests {
     use webrtc::rtp::{codecs::h264::H264Payloader, packetizer::Payloader};
 
     const TEST_NALU: &[u8] = include_bytes!("nalus/1.h264");
+
+    #[test]
+    fn unsafe_buf_mut() {
+        let mut vec = vec![0u8; 8];
+        let mut b = UnsafeBufMut::new(&mut vec);
+        let data = [42, 42];
+        unsafe {
+            assert_eq!(b.remaining_mut(), 8);
+            b.put_u8(42);
+            assert_eq!(b.remaining_mut(), 7);
+            assert_eq!(b.index, 1);
+            b.put_slice(&data);
+            assert_eq!(b.remaining_mut(), 5);
+            assert_eq!(b.index, 3);
+            b.put_u8(42);
+            assert_eq!(b.remaining_mut(), 4);
+            assert_eq!(b.index, 4);
+        }
+    }
 
     #[test]
     fn fragment_then_unfragment() {
