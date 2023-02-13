@@ -1,22 +1,12 @@
 //! Modified from rtp::codecs::h264::H264Payloader to allow directly sending the packets without
 //! allocating a Vec and annotated infrequently encountered branches with #[cold].
 
-use super::constants::*;
+use super::{super::util::RtpHeaderExt, constants::*};
 use bytes::{BufMut, Bytes, BytesMut};
 use webrtc::{
     rtp::{header::Header, packet::Packet},
     track::track_local::TrackLocalWriter,
 };
-
-trait RtpHeaderExt {
-    fn advance_sequence_number(&mut self);
-}
-
-impl RtpHeaderExt for Header {
-    fn advance_sequence_number(&mut self) {
-        self.sequence_number = self.sequence_number.wrapping_add(1);
-    }
-}
 
 /// `H264SampleSender` payloads H264 packets
 #[derive(Default, Debug, Clone)]
@@ -59,10 +49,104 @@ impl H264SampleSender {
         p.header.marker = true;
         header.advance_sequence_number();
         writer.write_rtp(&p).await?;
-        return Ok(());
+        Ok(())
+    }
+
+    #[inline(always)]
+    async fn emit_fragmented<T>(
+        header: &mut Header,
+        nalu_type: u8,
+        nalu: &[u8],
+        mtu: usize,
+        writer: &T,
+    ) -> Result<(), webrtc::Error>
+    where
+        T: TrackLocalWriter,
+    {
+        // The FU payload consists of fragments of the payload of the fragmented
+        // NAL unit so that if the fragmentation unit payloads of consecutive
+        // FUs are sequentially concatenated, the payload of the fragmented NAL
+        // unit can be reconstructed.  The NAL unit type octet of the fragmented
+        // NAL unit is not included as such in the fragmentation unit payload,
+        // 	but rather the information of the NAL unit type octet of the
+        // fragmented NAL unit is conveyed in the F and NRI fields of the FU
+        // indicator octet of the fragmentation unit and in the type field of
+        // the FU header.  An FU payload MAY have any number of octets and MAY
+        // be empty.
+
+        if mtu <= FUA_HEADER_SIZE || nalu.len() <= 1 {
+            return Ok(());
+        }
+
+        // FU-A
+        let max_fragment_size = mtu - FUA_HEADER_SIZE;
+
+        // According to the RFC, the first octet is skipped due to redundant information
+        let nalu_data_length = nalu.len() - 1;
+        
+        let buf_capacity = {
+            let div = nalu_data_length / max_fragment_size;
+            let rem = nalu_data_length % max_fragment_size ;
+            mtu * div + if rem != 0 { 3 + rem } else { 0 }
+        };
+
+        // This is brought outside the loop to decrease allocation/deallocation.
+        let mut out = BytesMut::with_capacity(buf_capacity);
+
+        // SKip first octet
+        let chunks = nalu[1..].chunks(max_fragment_size as usize);
+        let (num_chunks, _) = chunks.size_hint(); // This returns the true size of the iterator
+        let end_idx = num_chunks - 1;
+
+        // +---------------+
+        // |0|1|2|3|4|5|6|7|
+        // +-+-+-+-+-+-+-+-+
+        // |F|NRI|  Type   |
+        // +---------------+
+        let fu_indicator = (nalu[0] & NALU_REF_IDC_BITMASK) | FUA_NALU_TYPE;
+
+        for (i, chunk) in chunks.enumerate() {
+            let fu_header = {
+                if i == 0 {
+                    1 << 7 | nalu_type // With start bit
+                } else if i == end_idx {
+                    1 << 6 | nalu_type // With end bit
+                } else {
+                    nalu_type
+                }
+            };
+
+            out.put_u8(fu_indicator);
+            out.put_u8(fu_header);
+            out.put_slice(chunk);
+
+            let mut p = Packet {
+                header: header.clone(),
+                payload: out.split().freeze(),
+            };
+            p.header.marker = i == end_idx;
+            writer.write_rtp(&p).await?;
+            header.advance_sequence_number();
+        }
+
+        Ok(())
     }
 
     #[cold]
+    async fn emit_fragmented_non_inline<T>(
+        header: &mut Header,
+        nalu_type: u8,
+        nalu: &[u8],
+        mtu: usize,
+        writer: &T,
+    ) -> Result<(), webrtc::Error>
+    where
+        T: TrackLocalWriter,
+    {
+        Self::emit_fragmented(header, nalu_type, nalu, mtu, writer).await
+    }
+
+    // Don't annotate with `#[cold]` since this is called on only on `process_parameter_sets`
     async fn emit_parameter_sets<T>(
         header: &mut Header,
         sps_nalu: Bytes,
@@ -73,12 +157,12 @@ impl H264SampleSender {
     where
         T: TrackLocalWriter,
     {
-        // Pack current NALU with SPS and PPS as STAP-A
         let sps_len = (sps_nalu.len() as u16).to_be_bytes();
         let pps_len = (pps_nalu.len() as u16).to_be_bytes();
 
         let stap_a_nalu_len = 1 + 2 + sps_nalu.len() + 2 + pps_nalu.len();
 
+        // Try to pack current NALU with SPS and PPS as STAP-A
         if stap_a_nalu_len <= mtu {
             let mut stap_a_nalu = Vec::with_capacity(stap_a_nalu_len);
             stap_a_nalu.push(OUTPUT_STAP_AHEADER);
@@ -96,140 +180,23 @@ impl H264SampleSender {
             header.advance_sequence_number();
             writer.write_rtp(&p).await?;
         } else {
-            if sps_nalu.len() <= mtu {
-                Self::emit_single_nalu(header, &sps_nalu, mtu, writer).await?;
-            } else {
-                Self::emit_fragmented_non_inline(
-                    header,
-                    sps_nalu[0] & NALU_TYPE_BITMASK,
-                    sps_nalu[0] & NALU_REF_IDC_BITMASK,
-                    &sps_nalu,
-                    mtu,
-                    writer,
-                )
-                .await?;
-            }
-
-            if pps_nalu.len() <= mtu {
-                Self::emit_single_nalu(header, &pps_nalu, mtu, writer).await?;
-            } else {
-                Self::emit_fragmented_non_inline(
-                    header,
-                    pps_nalu[0] & NALU_TYPE_BITMASK,
-                    pps_nalu[0] & NALU_REF_IDC_BITMASK,
-                    &pps_nalu,
-                    mtu,
-                    writer,
-                )
-                .await?;
+            let nalus = [sps_nalu, pps_nalu];
+            for nalu in nalus {
+                if nalu.len() <= mtu {
+                    Self::emit_single_nalu(header, &nalu, mtu, writer).await?;
+                } else {
+                    Self::emit_fragmented_non_inline(
+                        header,
+                        nalu[0] & NALU_TYPE_BITMASK,
+                        &nalu,
+                        mtu,
+                        writer,
+                    )
+                    .await?;
+                }
             }
         }
-
         Ok(())
-    }
-
-    #[inline(always)]
-    async fn emit_fragmented<T>(
-        header: &mut Header,
-        nalu_type: u8,
-        nalu_ref_idc: u8,
-        nalu: &[u8],
-        mtu: usize,
-        writer: &T,
-    ) -> Result<(), webrtc::Error>
-    where
-        T: TrackLocalWriter,
-    {
-        // FU-A
-        let max_fragment_size = mtu as isize - FUA_HEADER_SIZE as isize;
-
-        // The FU payload consists of fragments of the payload of the fragmented
-        // NAL unit so that if the fragmentation unit payloads of consecutive
-        // FUs are sequentially concatenated, the payload of the fragmented NAL
-        // unit can be reconstructed.  The NAL unit type octet of the fragmented
-        // NAL unit is not included as such in the fragmentation unit payload,
-        // 	but rather the information of the NAL unit type octet of the
-        // fragmented NAL unit is conveyed in the F and NRI fields of the FU
-        // indicator octet of the fragmentation unit and in the type field of
-        // the FU header.  An FU payload MAY have any number of octets and MAY
-        // be empty.
-
-        let nalu_data = nalu;
-        // According to the RFC, the first octet is skipped due to redundant information
-        let mut nalu_data_index = 1;
-        let nalu_data_length = nalu.len() as isize - nalu_data_index;
-        let mut nalu_data_remaining = nalu_data_length;
-
-        if std::cmp::min(max_fragment_size, nalu_data_remaining) <= 0 {
-            return Ok(());
-        }
-
-        let buf_size = mtu * div_ceil(nalu.len(), max_fragment_size as usize);
-
-        // This is brought outside the loop to decrease allocation/deallocation.
-        let mut out = BytesMut::with_capacity(buf_size);
-
-        while nalu_data_remaining > 0 {
-            let current_fragment_size = std::cmp::min(max_fragment_size, nalu_data_remaining);
-            // +---------------+
-            // |0|1|2|3|4|5|6|7|
-            // +-+-+-+-+-+-+-+-+
-            // |F|NRI|  Type   |
-            // +---------------+
-            let b0 = FUA_NALU_TYPE | nalu_ref_idc;
-            out.put_u8(b0);
-
-            // +---------------+
-            //|0|1|2|3|4|5|6|7|
-            //+-+-+-+-+-+-+-+-+
-            //|S|E|R|  Type   |
-            //+---------------+
-
-            let mut b1 = nalu_type;
-            let mut marker = false;
-            if nalu_data_remaining == nalu_data_length {
-                // Set start bit
-                b1 |= 1 << 7;
-            } else if nalu_data_remaining - current_fragment_size == 0 {
-                // Set end bit
-                b1 |= 1 << 6;
-                marker = true;
-            }
-            out.put_u8(b1);
-
-            out.put(
-                &nalu_data
-                    [nalu_data_index as usize..(nalu_data_index + current_fragment_size) as usize],
-            );
-
-            nalu_data_remaining -= current_fragment_size;
-            nalu_data_index += current_fragment_size;
-
-            let mut p = Packet {
-                header: header.clone(),
-                payload: out.split().freeze(),
-            };
-            p.header.marker = marker;
-            header.advance_sequence_number();
-            writer.write_rtp(&p).await?;
-        }
-
-        Ok(())
-    }
-
-    #[cold]
-    async fn emit_fragmented_non_inline<T>(
-        header: &mut Header,
-        nalu_type: u8,
-        nalu_ref_idc: u8,
-        nalu: &[u8],
-        mtu: usize,
-        writer: &T,
-    ) -> Result<(), webrtc::Error>
-    where
-        T: TrackLocalWriter,
-    {
-        Self::emit_fragmented(header, nalu_type, nalu_ref_idc, nalu, mtu, writer).await
     }
 
     #[cold]
@@ -285,7 +252,6 @@ impl H264SampleSender {
         }
 
         let nalu_type = nalu[0] & NALU_TYPE_BITMASK;
-        let nalu_ref_idc = nalu[0] & NALU_REF_IDC_BITMASK;
 
         if nalu_type == AUD_NALU_TYPE || nalu_type == FILLER_NALU_TYPE {
             Self::emit_unhandled_nalu()
@@ -311,7 +277,7 @@ impl H264SampleSender {
             if nalu.len() <= mtu {
                 Self::emit_single_nalu(header, nalu, mtu, writer).await
             } else {
-                Self::emit_fragmented(header, nalu_type, nalu_ref_idc, nalu, mtu, writer).await
+                Self::emit_fragmented(header, nalu_type, nalu, mtu, writer).await
             }
         }
     }
@@ -360,21 +326,6 @@ impl H264SampleSender {
             }
         }
         Ok(())
-    }
-}
-
-/// Calculate the quotient, rounding up.
-///
-/// Implementation taken from unstable Rust feature in [`std`][std].
-///
-/// [std]: https://github.com/rust-lang/rust/blob/b15ca6635f752fefebfd101aa944c6167128183c/library/core/src/num/uint_macros.rs#L2059
-const fn div_ceil(lhs: usize, rhs: usize) -> usize {
-    let d = lhs / rhs;
-    let r = lhs % rhs;
-    if r > 0 && rhs > 0 {
-        d + 1
-    } else {
-        d
     }
 }
 
@@ -472,7 +423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sender() {
+    async fn h264_sender() {
         let capability = RTCRtpCodecCapability {
             mime_type: "video/H264".to_owned(),
             clock_rate: 90000,
