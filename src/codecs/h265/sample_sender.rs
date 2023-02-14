@@ -1,4 +1,7 @@
-use super::{super::util::RtpHeaderExt, constants::*};
+use super::{
+    super::util::{nalu_window, RtpHeaderExt},
+    constants::*,
+};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use webrtc::{
     rtp::{header::Header, packet::Packet},
@@ -14,21 +17,6 @@ pub struct H265SampleSender {
 }
 
 impl H265SampleSender {
-    fn next_ind(nalu: &[u8], start: usize) -> (isize, isize) {
-        let mut zero_count = 0;
-
-        for (i, &b) in nalu[start..].iter().enumerate() {
-            if b == 0 {
-                zero_count += 1;
-                continue;
-            } else if b == 1 && zero_count >= 2 {
-                return ((start + i - zero_count) as isize, zero_count as isize + 1);
-            }
-            zero_count = 0
-        }
-        (-1, -1)
-    }
-
     #[cold]
     async fn emit_single_nalu<T>(
         header: &mut Header,
@@ -238,24 +226,17 @@ impl H265SampleSender {
     async fn process_parameter_sets<T>(
         &mut self,
         header: &mut Header,
-        vps_nalu: Option<Bytes>,
-        sps_nalu: Option<Bytes>,
-        pps_nalu: Option<Bytes>,
+        parameter_set: ParameterSet,
         mtu: usize,
         writer: &T,
     ) -> Result<(), webrtc::Error>
     where
         T: TrackLocalWriter,
     {
-        if let Some(vps_nalu) = vps_nalu {
-            self.vps_nalu = Some(vps_nalu);
-        }
-        if let Some(sps_nalu) = sps_nalu {
-            self.sps_nalu = Some(sps_nalu);
-        }
-
-        if let Some(pps_nalu) = pps_nalu {
-            self.pps_nalu = Some(pps_nalu);
+        match parameter_set {
+            ParameterSet::Vps(b) => self.vps_nalu = Some(b),
+            ParameterSet::Sps(b) => self.sps_nalu = Some(b),
+            ParameterSet::Pps(b) => self.pps_nalu = Some(b),
         }
 
         if self.vps_nalu.is_some() && self.sps_nalu.is_some() && self.pps_nalu.is_some() {
@@ -275,8 +256,85 @@ impl H265SampleSender {
         Ok(())
     }
 
-    #[cold]
-    fn emit_unhandled_nalu() -> Result<(), webrtc::Error> {
+    #[inline]
+    async fn emit<T>(
+        &mut self,
+        header: &mut Header,
+        nalu: &[u8],
+        mtu: usize,
+        writer: &T,
+    ) -> Result<(), webrtc::Error>
+    where
+        T: TrackLocalWriter,
+    {
+        if nalu.is_empty() {
+            return Ok(());
+        }
+
+        let nalu_type = nalu[0] & TRUNCATED_NALU_TYPE_MASK;
+
+        if nalu_type == VPS_NALU_TYPE {
+            self.process_parameter_sets(
+                header,
+                ParameterSet::Vps(Bytes::copy_from_slice(nalu)),
+                mtu,
+                writer,
+            )
+            .await
+        } else if nalu_type == SPS_NALU_TYPE {
+            self.process_parameter_sets(
+                header,
+                ParameterSet::Sps(Bytes::copy_from_slice(nalu)),
+                mtu,
+                writer,
+            )
+            .await
+        } else if nalu_type == PPS_NALU_TYPE {
+            self.process_parameter_sets(
+                header,
+                ParameterSet::Pps(Bytes::copy_from_slice(nalu)),
+                mtu,
+                writer,
+            )
+            .await
+        } else {
+            if nalu.len() <= mtu {
+                Self::emit_single_nalu(header, nalu, mtu, writer).await
+            } else {
+                Self::emit_fragmented(header, nalu_type, nalu, mtu, writer).await
+            }
+        }
+    }
+
+    /// Sends an H.265 NALU to the receiver. The payload must start with a NALU delimiter
+    /// (`0b"\x00\x00\x00\x01"`).
+    #[inline]
+    pub async fn send_payload<T>(
+        &mut self,
+        mtu: usize,
+        header: &mut Header,
+        payload: &[u8],
+        writer: &T,
+    ) -> Result<(), webrtc::Error>
+    where
+        T: TrackLocalWriter,
+    {
+        if payload.is_empty() || mtu == 0 {
+            return Ok(());
+        }
+
+        header.marker = false;
+
+        for nalu in nalu_window(payload) {
+            self.emit(header, nalu, mtu, writer).await?;
+        }
+
         Ok(())
     }
+}
+
+enum ParameterSet {
+    Vps(Bytes),
+    Sps(Bytes),
+    Pps(Bytes),
 }

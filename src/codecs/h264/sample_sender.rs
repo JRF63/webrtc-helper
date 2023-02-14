@@ -1,7 +1,10 @@
 //! Modified from rtp::codecs::h264::H264Payloader to allow directly sending the packets without
 //! allocating a Vec and annotated infrequently encountered branches with #[cold].
 
-use super::{super::util::RtpHeaderExt, constants::*};
+use super::{
+    super::util::{nalu_window, RtpHeaderExt},
+    constants::*,
+};
 use bytes::{BufMut, Bytes, BytesMut};
 use webrtc::{
     rtp::{header::Header, packet::Packet},
@@ -16,21 +19,6 @@ pub struct H264SampleSender {
 }
 
 impl H264SampleSender {
-    fn next_ind(nalu: &[u8], start: usize) -> (isize, isize) {
-        let mut zero_count = 0;
-
-        for (i, &b) in nalu[start..].iter().enumerate() {
-            if b == 0 {
-                zero_count += 1;
-                continue;
-            } else if b == 1 && zero_count >= 2 {
-                return ((start + i - zero_count) as isize, zero_count as isize + 1);
-            }
-            zero_count = 0
-        }
-        (-1, -1)
-    }
-
     #[cold]
     async fn emit_single_nalu<T>(
         header: &mut Header,
@@ -83,10 +71,10 @@ impl H264SampleSender {
 
         // According to the RFC, the first octet is skipped due to redundant information
         let nalu_data_length = nalu.len() - 1;
-        
+
         let buf_capacity = {
             let div = nalu_data_length / max_fragment_size;
-            let rem = nalu_data_length % max_fragment_size ;
+            let rem = nalu_data_length % max_fragment_size;
             mtu * div + if rem != 0 { 3 + rem } else { 0 }
         };
 
@@ -282,7 +270,8 @@ impl H264SampleSender {
         }
     }
 
-    /// Payload fragments a H264 packet across one or more byte arrays
+    /// Sends a H264 NALU across one or more byte arrays. The payload must start with a NALU
+    /// delimiter (`0b"\x00\x00\x00\x01"`).
     #[inline]
     pub async fn send_payload<T>(
         &mut self,
@@ -300,31 +289,10 @@ impl H264SampleSender {
 
         header.marker = false;
 
-        let (mut next_ind_start, mut next_ind_len) = H264SampleSender::next_ind(payload, 0);
-        if next_ind_start == -1 {
-            self.emit(header, payload, mtu, writer).await?;
-        } else {
-            while next_ind_start != -1 {
-                let prev_start = (next_ind_start + next_ind_len) as usize;
-                let (next_ind_start2, next_ind_len2) =
-                    H264SampleSender::next_ind(payload, prev_start);
-                next_ind_start = next_ind_start2;
-                next_ind_len = next_ind_len2;
-                if next_ind_start != -1 {
-                    self.emit(
-                        header,
-                        &payload[prev_start..next_ind_start as usize],
-                        mtu,
-                        writer,
-                    )
-                    .await?;
-                } else {
-                    // Emit until end of stream, no end indicator found
-                    self.emit(header, &payload[prev_start..], mtu, writer)
-                        .await?;
-                }
-            }
+        for nalu in nalu_window(payload) {
+            self.emit(header, nalu, mtu, writer).await?;
         }
+
         Ok(())
     }
 }
