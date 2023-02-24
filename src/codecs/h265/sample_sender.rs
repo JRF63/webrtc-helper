@@ -1,5 +1,5 @@
 use super::{
-    super::util::{nalu_window, RtpHeaderExt},
+    super::util::{nalu_chunks, RtpHeaderExt},
     constants::*,
 };
 use bytes::{Buf, BufMut, Bytes, BytesMut};
@@ -83,8 +83,7 @@ impl H265SampleSender {
         };
 
         let chunks = nalu[2..].chunks(max_fragment_size);
-        let (num_chunks, _) = chunks.size_hint(); // This returns the true size of the iterator
-        let end_idx = num_chunks - 1;
+        let end_idx = chunks.len() - 1;
 
         for (i, chunk) in chunks.enumerate() {
             let fu_header = {
@@ -145,7 +144,6 @@ impl H265SampleSender {
         if ap_len <= mtu {
             let mut ap_nalu = BytesMut::with_capacity(ap_len);
 
-            // TID OR'ed with payload_type = 48
             let nalu_header: u16 = {
                 let headers = {
                     let nalus: [&[u8]; 3] = [&vps_nalu, &sps_nalu, &pps_nalu];
@@ -325,7 +323,7 @@ impl H265SampleSender {
 
         header.marker = false;
 
-        for nalu in nalu_window(payload) {
+        for nalu in nalu_chunks(payload) {
             self.emit(header, nalu, mtu, writer).await?;
         }
 

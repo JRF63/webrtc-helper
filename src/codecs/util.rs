@@ -25,12 +25,12 @@ fn next_ind(data: &[u8], start: usize) -> (usize, usize) {
     (data.len(), data.len())
 }
 
-pub struct NaluWindow<'a> {
+pub struct NaluChunks<'a> {
     data: &'a [u8],
     start: usize,
 }
 
-impl<'a> Iterator for NaluWindow<'a> {
+impl<'a> Iterator for NaluChunks<'a> {
     type Item = &'a [u8];
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -45,9 +45,9 @@ impl<'a> Iterator for NaluWindow<'a> {
     }
 }
 
-pub fn nalu_window(data: &[u8]) -> NaluWindow {
+pub fn nalu_chunks(data: &[u8]) -> NaluChunks {
     let (_, start) = next_ind(data, 0);
-    NaluWindow { data, start }
+    NaluChunks { data, start }
 }
 
 #[cfg(test)]
@@ -55,7 +55,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nalu_window_test() {
+    fn nalu_chunks_test() {
         let tests: Vec<(&[u8], Option<&[u8]>)> = vec![
             (&[], None),
             (&[0, 0, 0, 1], None),
@@ -64,7 +64,7 @@ mod tests {
             (&[0, 0, 0, 0], None),
         ];
         for (data, res) in tests {
-            assert_eq!(nalu_window(&data).next(), res);
+            assert_eq!(nalu_chunks(&data).next(), res);
         }
     }
 }

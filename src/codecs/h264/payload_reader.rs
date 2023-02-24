@@ -1,7 +1,22 @@
 //! Modifed from the `Depacketizer` impl of [webrtc::rtp::codecs::h264::H264Packet].
 
 use super::constants::*;
-use crate::util::reorder_buffer::{PayloadReader, PayloadReaderOutput};
+
+pub enum PayloadReaderOutput {
+    BytesWritten(usize),
+    NeedMoreInput,
+}
+
+pub trait PayloadReader<'a>
+where
+    Self: Sized,
+{
+    type Error;
+
+    fn new_reader(output: &'a mut [u8]) -> Self;
+
+    fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error>;
+}
 
 /// `H264PayloadReader` reads payloads from RTP packets and produces NAL units.
 pub struct H264PayloadReader<'a> {

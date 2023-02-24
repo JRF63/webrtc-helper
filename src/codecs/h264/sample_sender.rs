@@ -2,7 +2,7 @@
 //! allocating a Vec and annotated infrequently encountered branches with #[cold].
 
 use super::{
-    super::util::{nalu_window, RtpHeaderExt},
+    super::util::{nalu_chunks, RtpHeaderExt},
     constants::*,
 };
 use bytes::{BufMut, Bytes, BytesMut};
@@ -83,8 +83,7 @@ impl H264SampleSender {
 
         // SKip first octet
         let chunks = nalu[1..].chunks(max_fragment_size as usize);
-        let (num_chunks, _) = chunks.size_hint(); // This returns the true size of the iterator
-        let end_idx = num_chunks - 1;
+        let end_idx = chunks.len() - 1;
 
         // +---------------+
         // |0|1|2|3|4|5|6|7|
@@ -289,7 +288,7 @@ impl H264SampleSender {
 
         header.marker = false;
 
-        for nalu in nalu_window(payload) {
+        for nalu in nalu_chunks(payload) {
             self.emit(header, nalu, mtu, writer).await?;
         }
 
