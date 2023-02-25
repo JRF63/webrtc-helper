@@ -1,15 +1,27 @@
-use webrtc::rtp::header::Header;
-
-pub trait RtpHeaderExt {
-    fn advance_sequence_number(&mut self);
+pub struct NaluChunks<'a> {
+    data: &'a [u8],
+    start: usize,
 }
 
-impl RtpHeaderExt for Header {
-    fn advance_sequence_number(&mut self) {
-        self.sequence_number = self.sequence_number.wrapping_add(1);
+impl<'a> Iterator for NaluChunks<'a> {
+    type Item = &'a [u8];
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start == self.data.len() {
+            None
+        } else {
+            let (end, next_start) = next_ind(self.data, self.start);
+            // SAFETY:
+            // `next_ind` always returns valid indices
+            let slice = unsafe { self.data.get_unchecked(self.start..end) };
+            self.start = next_start;
+            Some(slice)
+        }
     }
 }
 
+#[inline]
 fn next_ind(data: &[u8], start: usize) -> (usize, usize) {
     let mut zero_count = 0;
 
@@ -23,26 +35,6 @@ fn next_ind(data: &[u8], start: usize) -> (usize, usize) {
         zero_count = 0
     }
     (data.len(), data.len())
-}
-
-pub struct NaluChunks<'a> {
-    data: &'a [u8],
-    start: usize,
-}
-
-impl<'a> Iterator for NaluChunks<'a> {
-    type Item = &'a [u8];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.start == self.data.len() {
-            None
-        } else {
-            let (end, next_start) = next_ind(self.data, self.start);
-            let slice = &self.data[self.start..end];
-            self.start = next_start;
-            Some(slice)
-        }
-    }
 }
 
 pub fn nalu_chunks(data: &[u8]) -> NaluChunks {
