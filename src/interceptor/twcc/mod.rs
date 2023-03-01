@@ -4,7 +4,7 @@ mod sender;
 mod sync;
 mod time;
 
-use crate::util::data_rate::DataRate;
+use crate::network::data_rate::DataRate;
 pub use interceptor::TwccInterceptorBuilder;
 use tokio::sync::watch;
 

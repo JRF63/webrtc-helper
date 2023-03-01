@@ -1,56 +1,27 @@
-//! Modifed from the `Depacketizer` impl of [webrtc::rtp::codecs::h264::H264Packet].
+use crate::codecs::{
+    h264::constants::*,
+    util::{Depacketizer, DepacketizerError, UnsafeBufMut},
+};
 
-use super::{super::util::UnsafeBufMut, constants::*};
-
-pub enum PayloadReaderOutput {
-    BytesWritten(usize),
-    NeedMoreInput,
-}
-
-pub trait PayloadReader<'a>
-where
-    Self: Sized,
-{
-    type Error;
-
-    fn new_reader(output: &'a mut [u8]) -> Self;
-
-    fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error>;
-}
-
-/// `H264PayloadReader` reads payloads from RTP packets and produces NAL units.
-pub struct H264PayloadReader<'a> {
+/// `H264Depacketizer` reads payloads from RTP packets and produces NAL units.
+pub struct H264Depacketizer<'a> {
     buf_mut: UnsafeBufMut<'a>,
     is_aggregating: bool,
 }
 
-/// Errors that `H264PayloadReader::read` can return.
-pub enum H264PayloadReaderError {
-    PayloadTooShort,
-    OutputBufferFull,
-    NaluTypeIsNotHandled,
-    AggregationInterrupted,
-    MissedAggregateStart,
-}
-
-impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
-    type Error = H264PayloadReaderError;
-
+impl<'a> Depacketizer<'a> for H264Depacketizer<'a> {
     #[inline]
-    fn new_reader(output: &'a mut [u8]) -> H264PayloadReader<'a> {
-        H264PayloadReader {
+    fn wrap_buffer(output: &'a mut [u8]) -> Self {
+        H264Depacketizer {
             buf_mut: UnsafeBufMut::new(output),
             is_aggregating: false,
         }
     }
 
-    /// Reads a payload into the buffer. This method returns the number of bytes written to the
-    /// original buffer upon success, indicating one or more NALU has been successfully written to
-    /// the buffer.
     #[inline]
-    fn push_payload(&mut self, payload: &[u8]) -> Result<PayloadReaderOutput, Self::Error> {
+    fn push(&mut self, payload: &[u8]) -> Result<(), DepacketizerError> {
         if payload.len() <= FUA_HEADER_SIZE {
-            return Err(H264PayloadReaderError::PayloadTooShort);
+            return Err(DepacketizerError::PayloadTooShort);
         }
 
         // NALU header
@@ -65,8 +36,8 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
         // NALU Types
         // https://tools.ietf.org/html/rfc6184#section-5.4
         match b0 & NALU_TYPE_BITMASK {
-            1..=23 => H264PayloadReader::single_nalu(self, payload),
-            STAPA_NALU_TYPE => H264PayloadReader::stapa_nalu(self, payload),
+            1..=23 => H264Depacketizer::single_nalu(self, payload),
+            STAPA_NALU_TYPE => H264Depacketizer::stapa_nalu(self, payload),
             FUA_NALU_TYPE => {
                 // FU header
                 //
@@ -91,10 +62,10 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
                                 self.buf_mut.put_u8(nalu_ref_idc | fragmented_nalu_type);
                             }
                         } else {
-                            return Err(H264PayloadReaderError::OutputBufferFull);
+                            return Err(DepacketizerError::OutputBufferFull);
                         }
                     } else {
-                        return Err(H264PayloadReaderError::MissedAggregateStart);
+                        return Err(DepacketizerError::MissedAggregateStart);
                     }
                 }
 
@@ -106,33 +77,30 @@ impl<'a> PayloadReader<'a> for H264PayloadReader<'a> {
                         self.buf_mut.put_slice(partial_nalu);
                     }
                 } else {
-                    return Err(H264PayloadReaderError::OutputBufferFull);
+                    return Err(DepacketizerError::OutputBufferFull);
                 }
 
                 if b1 & FU_END_BITMASK != 0 {
-                    Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+                    Ok(())
                 } else {
-                    Ok(PayloadReaderOutput::NeedMoreInput)
+                    Err(DepacketizerError::NeedMoreInput)
                 }
             }
-            _ => H264PayloadReader::other_nalu(self, payload),
+            _ => H264Depacketizer::other_nalu(self, payload),
         }
+    }
+
+    #[inline]
+    fn finish(self) -> usize {
+        self.buf_mut.num_bytes_written()
     }
 }
 
-impl<'a> H264PayloadReader<'a> {
-    #[inline(always)]
-    fn num_bytes_written(&self) -> usize {
-        self.buf_mut.num_bytes_written()
-    }
-
+impl<'a> H264Depacketizer<'a> {
     #[cold]
-    fn single_nalu(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
+    fn single_nalu(&mut self, payload: &[u8]) -> Result<(), DepacketizerError> {
         if self.is_aggregating {
-            return Err(H264PayloadReaderError::AggregationInterrupted);
+            return Err(DepacketizerError::AggregationInterrupted);
         }
         if self.buf_mut.remaining_mut() >= ANNEXB_NALUSTART_CODE.len() + payload.len() {
             // SAFETY: Checked that the buffer has enough space
@@ -140,19 +108,16 @@ impl<'a> H264PayloadReader<'a> {
                 self.buf_mut.put_slice(ANNEXB_NALUSTART_CODE);
                 self.buf_mut.put_slice(payload);
             }
-            Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+            Ok(())
         } else {
-            Err(H264PayloadReaderError::OutputBufferFull)
+            Err(DepacketizerError::OutputBufferFull)
         }
     }
 
     #[cold]
-    fn stapa_nalu(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
+    fn stapa_nalu(&mut self, payload: &[u8]) -> Result<(), DepacketizerError> {
         if self.is_aggregating {
-            return Err(H264PayloadReaderError::AggregationInterrupted);
+            return Err(DepacketizerError::AggregationInterrupted);
         }
         let mut curr_offset = STAPA_HEADER_SIZE;
 
@@ -160,7 +125,7 @@ impl<'a> H264PayloadReader<'a> {
             // Get 2 bytes of the NALU size
             let nalu_size_bytes = payload
                 .get(curr_offset..curr_offset + 2)
-                .ok_or(H264PayloadReaderError::PayloadTooShort)?;
+                .ok_or(DepacketizerError::PayloadTooShort)?;
 
             // NALU size is a 16-bit unsigned integer in network byte order.
             // The compiler should be able to deduce that `try_into().unwrap()` would not panic.
@@ -170,7 +135,7 @@ impl<'a> H264PayloadReader<'a> {
 
             let nalu = payload
                 .get(curr_offset..curr_offset + nalu_size)
-                .ok_or(H264PayloadReaderError::PayloadTooShort)?;
+                .ok_or(DepacketizerError::PayloadTooShort)?;
 
             if self.buf_mut.remaining_mut() >= ANNEXB_NALUSTART_CODE.len() + nalu.len() {
                 // SAFETY: Checked that the buffer has enough space
@@ -179,18 +144,18 @@ impl<'a> H264PayloadReader<'a> {
                     self.buf_mut.put_slice(nalu);
                 }
             } else {
-                return Err(H264PayloadReaderError::OutputBufferFull);
+                return Err(DepacketizerError::OutputBufferFull);
             }
 
             curr_offset += nalu_size;
         }
 
-        Ok(PayloadReaderOutput::BytesWritten(self.num_bytes_written()))
+        Ok(())
     }
 
     #[cold]
-    fn other_nalu(&self, _payload: &[u8]) -> Result<PayloadReaderOutput, H264PayloadReaderError> {
-        Err(H264PayloadReaderError::NaluTypeIsNotHandled)
+    fn other_nalu(&self, _payload: &[u8]) -> Result<(), DepacketizerError> {
+        Err(DepacketizerError::UnsupportedPayloadType)
     }
 }
 
@@ -210,15 +175,15 @@ mod tests {
             .unwrap();
 
         let mut output = vec![0u8; TEST_NALU.len()];
-        let mut reader = H264PayloadReader::new_reader(&mut output);
+        let mut reader = H264Depacketizer::wrap_buffer(&mut output);
         let mut bytes_written = None;
         for payload in payloads {
-            match reader.push_payload(&payload) {
-                Ok(PayloadReaderOutput::BytesWritten(n)) => {
-                    bytes_written = Some(n);
+            match reader.push(&payload) {
+                Ok(()) => {
+                    bytes_written = Some(reader.finish());
                     break;
                 }
-                Ok(PayloadReaderOutput::NeedMoreInput) => continue,
+                Err(DepacketizerError::NeedMoreInput) => continue,
                 Err(_) => panic!("Error processing payloads"),
             }
         }

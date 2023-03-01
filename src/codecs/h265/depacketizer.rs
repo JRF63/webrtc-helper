@@ -3,6 +3,7 @@ use crate::codecs::{
     util::{Depacketizer, DepacketizerError, UnsafeBufMut},
 };
 
+/// An H.265 depacketizer. This implementation can only handle payloads without the optional DONL.
 pub struct H265Depacketizer<'a> {
     buf_mut: UnsafeBufMut<'a>,
     is_aggregating: bool,
@@ -10,7 +11,7 @@ pub struct H265Depacketizer<'a> {
 
 impl<'a> Depacketizer<'a> for H265Depacketizer<'a> {
     #[inline]
-    fn new_reader(output: &'a mut [u8]) -> Self {
+    fn wrap_buffer(output: &'a mut [u8]) -> Self {
         H265Depacketizer {
             buf_mut: UnsafeBufMut::new(output),
             is_aggregating: false,
@@ -18,7 +19,7 @@ impl<'a> Depacketizer<'a> for H265Depacketizer<'a> {
     }
 
     #[inline]
-    fn push_payload(&mut self, payload: &[u8]) -> Result<(), DepacketizerError> {
+    fn push(&mut self, payload: &[u8]) -> Result<(), DepacketizerError> {
         // Payload Header
         //
         // +---------------+---------------+

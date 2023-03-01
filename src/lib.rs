@@ -2,9 +2,9 @@ pub mod codecs;
 pub mod decoder;
 pub mod encoder;
 pub mod interceptor;
+pub mod network;
 pub mod peer;
 pub mod signaling;
-pub mod util;
 
 pub use self::{
     codecs::Codec,

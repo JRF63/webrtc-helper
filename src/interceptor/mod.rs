@@ -1,6 +1,6 @@
 pub mod twcc;
 
-use crate::util::data_rate::DataRate;
+use crate::network::data_rate::DataRate;
 use twcc::{twcc_bandwidth_estimate_channel, TwccBandwidthEstimate, TwccInterceptorBuilder};
 use webrtc::{error::Result, interceptor::registry::Registry};
 

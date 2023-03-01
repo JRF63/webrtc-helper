@@ -4,8 +4,9 @@ mod h265;
 mod util;
 
 pub use self::{
-    h264::{H264Codec, H264PayloadReader, H264PayloadReaderError, H264Profile, H264SampleSender},
-    h265::H265SampleSender,
+    h264::{H264Codec, H264Depacketizer, H264Profile, H264SampleSender},
+    h265::{H265Depacketizer, H265SampleSender},
+    util::{Depacketizer, DepacketizerError},
 };
 use webrtc::{
     api::media_engine::MediaEngine,

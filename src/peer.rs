@@ -4,7 +4,7 @@ use crate::{
     encoder::{EncoderBuilder, EncoderTrackLocal},
     interceptor::{configure_custom_twcc_sender, twcc::TwccBandwidthEstimate},
     signaling::{Message, Signaler},
-    util::data_rate::DataRate,
+    network::data_rate::DataRate,
 };
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex, Notify};

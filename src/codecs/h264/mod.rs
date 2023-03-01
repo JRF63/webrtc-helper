@@ -1,13 +1,11 @@
 mod constants;
+mod depacketizer;
 mod parameter_set;
-mod payload_reader;
 mod profile;
 mod sample_sender;
 
 pub use self::{
-    payload_reader::{H264PayloadReader, H264PayloadReaderError},
-    profile::H264Profile,
-    sample_sender::H264SampleSender,
+    depacketizer::H264Depacketizer, profile::H264Profile, sample_sender::H264SampleSender,
 };
 use super::{supported_video_rtcp_feedbacks, Codec, CodecType, MIME_TYPE_H264};
 use webrtc::rtp_transceiver::rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters};

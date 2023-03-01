@@ -21,7 +21,7 @@ use webrtc_helper::{
     encoder::EncoderBuilder,
     interceptor::twcc::TwccBandwidthEstimate,
     peer::IceConnectionState,
-    util::data_rate::DataRate,
+    network::data_rate::DataRate,
 };
 
 pub struct MockEncoderBuilder {
