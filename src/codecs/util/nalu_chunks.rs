@@ -1,3 +1,4 @@
+/// Iterator over NALUs. The returned `&[u8]`s does not include the NALU delimiter.
 pub struct NaluChunks<'a> {
     data: &'a [u8],
     start: usize,
@@ -37,6 +38,8 @@ fn next_ind(data: &[u8], start: usize) -> (usize, usize) {
     (data.len(), data.len())
 }
 
+/// Returns an iterator over the NALU bytes of `data`.
+#[inline]
 pub fn nalu_chunks(data: &[u8]) -> NaluChunks {
     let (_, start) = next_ind(data, 0);
     NaluChunks { data, start }

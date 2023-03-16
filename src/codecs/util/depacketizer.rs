@@ -1,6 +1,7 @@
 /// Errors that `Depacketizer` can return.
 /// 
 /// `NeedMoreInput` is non-fatal and must be treated as a request for more payload.
+#[derive(Debug)]
 pub enum DepacketizerError {
     NeedMoreInput,
     PayloadTooShort,
@@ -15,12 +16,11 @@ pub enum DepacketizerError {
 /// This is different from `webrtc::rtp::packetizer::Depacketizer` in that it requires a buffer to
 /// be passed for initialization. This is done to prevent unnecessary allocation/deallocation and
 /// copying.
-pub trait Depacketizer<'a>
-where
-    Self: Sized,
-{
+pub trait Depacketizer {
+    type WrapOutput<'a>: Depacketizer;
+
     /// Create a new `Depacketizer` by wrapping an existing buffer.
-    fn wrap_buffer(output: &'a mut [u8]) -> Self;
+    fn wrap_buffer<'a>(output: &'a mut [u8]) -> Self::WrapOutput<'a>;
 
     /// Add a payload to be depacketized. This method can return `DepacketizerError::NeedMoreInput`
     /// signaling that the depacketizer needs more packets to complete the data.

@@ -9,9 +9,11 @@ pub struct H264Depacketizer<'a> {
     is_aggregating: bool,
 }
 
-impl<'a> Depacketizer<'a> for H264Depacketizer<'a> {
+impl<'a> Depacketizer for H264Depacketizer<'a> {
+    type WrapOutput<'b> = H264Depacketizer<'b>;
+
     #[inline]
-    fn wrap_buffer(output: &'a mut [u8]) -> Self {
+    fn wrap_buffer<'c>(output: &'c mut [u8]) -> Self::WrapOutput<'c> {
         H264Depacketizer {
             buf_mut: UnsafeBufMut::new(output),
             is_aggregating: false,
