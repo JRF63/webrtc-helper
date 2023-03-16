@@ -78,7 +78,8 @@ impl H264Codec {
         self
     }
 
-    /// Read the (width, height) of the video stream from the SPS/PPS parameter sets.
+    /// Read the (width, height) of the video stream from the SPS/PPS parameter sets. The argument
+    /// `nal` does not need to have a NALU delimiter \x00\x00\x00\x01.
     pub fn get_resolution(nal: &[u8]) -> Option<(usize, usize)> {
         parameter_set::parse_parameter_sets_for_resolution(nal)
     }

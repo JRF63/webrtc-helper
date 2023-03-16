@@ -1,3 +1,4 @@
+use crate::codecs::h264::constants::SPS_NALU_TYPE;
 use exp_golomb::ExpGolombDecoder;
 
 const NALU_TYPE_BITMASK: u8 = 0x1F;
@@ -13,7 +14,7 @@ pub fn parse_parameter_sets_for_resolution(buf: &[u8]) -> Option<(usize, usize)>
                     if zeroes >= 2 {
                         let candidate = i + 1;
                         // Data is found in the SPS
-                        if buf.get(candidate)? & NALU_TYPE_BITMASK == 7 {
+                        if buf.get(candidate)? & NALU_TYPE_BITMASK == SPS_NALU_TYPE {
                             break 'outer candidate;
                         }
                     }
@@ -23,8 +24,8 @@ pub fn parse_parameter_sets_for_resolution(buf: &[u8]) -> Option<(usize, usize)>
             }
         }
 
-        // Reached end of buffer
-        return None;
+        // Reached end of buffer, no NAL delimiter
+        0
     };
 
     // Skip nal_unit_type
