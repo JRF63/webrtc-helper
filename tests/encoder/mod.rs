@@ -20,8 +20,8 @@ use webrtc_helper::{
     codecs::{Codec, CodecType},
     encoder::EncoderBuilder,
     interceptor::twcc::TwccBandwidthEstimate,
-    peer::IceConnectionState,
     network::data_rate::DataRate,
+    peer::IceConnectionState,
 };
 
 pub struct MockEncoderBuilder {

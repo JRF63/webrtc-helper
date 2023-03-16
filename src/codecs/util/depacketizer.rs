@@ -1,5 +1,5 @@
 /// Errors that `Depacketizer` can return.
-/// 
+///
 /// `NeedMoreInput` is non-fatal and must be treated as a request for more payload.
 #[derive(Debug)]
 pub enum DepacketizerError {
@@ -12,7 +12,7 @@ pub enum DepacketizerError {
 }
 
 /// Depacketizes payloads into a codec specific format (i.e, a NALU).
-/// 
+///
 /// This is different from `webrtc::rtp::packetizer::Depacketizer` in that it requires a buffer to
 /// be passed for initialization. This is done to prevent unnecessary allocation/deallocation and
 /// copying.
@@ -24,7 +24,7 @@ pub trait Depacketizer {
 
     /// Add a payload to be depacketized. This method can return `DepacketizerError::NeedMoreInput`
     /// signaling that the depacketizer needs more packets to complete the data.
-    /// 
+    ///
     /// The `Depacketizer` trait assumes that the given payloads are in-order.
     fn push(&mut self, payload: &[u8]) -> Result<(), DepacketizerError>;
 

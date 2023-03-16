@@ -152,7 +152,7 @@ impl<'a> H265Depacketizer<'a> {
 
             curr_offset += nalu_size;
         }
-        
+
         Ok(())
     }
 
