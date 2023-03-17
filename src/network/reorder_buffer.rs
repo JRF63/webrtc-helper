@@ -20,7 +20,7 @@ pub enum ReorderBufferError {
     TrackRemoteReadError,
     PacketTooShort,
     BufferFull,
-    UnableToMaintainReorderBuffer,
+    UnorderablePacketReceived,
 }
 
 pub struct BufferedTrackRemote {
@@ -43,32 +43,31 @@ impl BufferedTrackRemote {
     }
 
     #[cold]
-    fn track_read_timeout(&self) -> Result<&[u8], ReorderBufferError> {
+    fn track_read_timeout(&self) -> Result<(&[u8], u32), ReorderBufferError> {
         Err(ReorderBufferError::TrackRemoteReadTimeout)
     }
 
     #[cold]
-    fn track_read_error(&self) -> Result<&[u8], ReorderBufferError> {
+    fn track_read_error(&self) -> Result<(&[u8], u32), ReorderBufferError> {
         Err(ReorderBufferError::TrackRemoteReadError)
     }
 
     // SAFETY:
     // `self.buffers` should not be empty and `len` should be <= `MAX_MTU`
     #[inline]
-    unsafe fn last_buffer_payload(&mut self, len: usize) -> Result<&[u8], ReorderBufferError> {
+    unsafe fn last_buffer_payload(&mut self, len: usize) -> Result<(&[u8], u32), ReorderBufferError> {
         let last_buffer = self.buffers.last().unwrap_unchecked();
         let mut b: &[u8] = last_buffer.get_unchecked(..len);
 
         // Unmarshaling the header would move `b` to point to the payload
-        if unmarshal_header(&mut b).is_none() {
-            return Err(ReorderBufferError::HeaderParsingError);
-        };
-
-        return Ok(b);
+        match unmarshal_header(&mut b) {
+            Some(header) => Ok((b, header.timestamp)),
+            None => Err(ReorderBufferError::HeaderParsingError),
+        }
     }
 
     #[inline]
-    pub async fn recv(&mut self) -> Result<&[u8], ReorderBufferError> {
+    pub async fn recv(&mut self) -> Result<(&[u8], u32), ReorderBufferError> {
         loop {
             if let Some(first_entry) = self.packets.first_entry() {
                 // SAFETY:
@@ -142,7 +141,7 @@ impl BufferedTrackRemote {
                         }
 
                         std::cmp::Ordering::Less => {
-                            return Err(ReorderBufferError::UnableToMaintainReorderBuffer)
+                            return Err(ReorderBufferError::UnorderablePacketReceived)
                         }
 
                         // Either:
@@ -364,7 +363,7 @@ mod tests {
         let saved_packets_len = buffered_track.packets.len();
 
         for seq_num in seq_nums {
-            let mut b = buffered_track.recv().await.unwrap();
+            let (mut b, _) = buffered_track.recv().await.unwrap();
             assert_eq!(seq_num.0, b.get_u16());
         }
 
